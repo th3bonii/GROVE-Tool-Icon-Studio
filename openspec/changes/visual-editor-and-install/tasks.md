@@ -38,17 +38,17 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Rust IPC Commands
 
-- [ ] 2.1 Modify `process_icon` in `lib.rs` — accept `crop: Option<CropArea>`, `state_size: u32`, infer preview mode from `output_dir: Option<String>`
-- [ ] 2.2 Add `preview_icon` command — wraps `process_icon` with preview=true, returns `PreviewOutput`
-- [ ] 2.3 Add `install_icon` command — wraps `installer::install_icon`
-- [ ] 2.4 Add `list_installed_icons` command — wraps `installer::list_installed_icons`
-- [ ] 2.5 Register all new commands in `tauri::generate_handler![]`
+- [x] 2.1 Modify `process_icon` in `lib.rs` — accept `crop: Option<CropArea>`, `state_size: Optional<u32>` (defaults 30), optional crop
+- [x] 2.2 Add `preview_icon` command — calls `generate_three_state` with `output_path=None`, returns base64 in `PreviewOutput`
+- [x] 2.3 Add `install_icon` command — wraps `installer::install_icon`, returns installed path as `String`
+- [x] 2.4 Add `list_installed_icons` command — wraps `installer::list_installed_icons`
+- [x] 2.5 Register all new commands in `tauri::generate_handler![]`
 
 ## Phase 3: Frontend API Layer & Hooks
 
-- [ ] 3.1 Add `CropArea`, `ProcessIconOptions`, `PreviewResult` types to `src/api.ts`
-- [ ] 3.2 Extend `processIcon()` to accept `ProcessIconOptions` (backward-compatible overload)
-- [ ] 3.3 Add `previewIcon()`, `installIcon()`, `listInstalledIcons()` to `src/api.ts`
+- [x] 3.1 Add `CropArea`, `ProcessingOutput` types to `src/api.ts` (matches Rust structs)
+- [x] 3.2 Extend `processIcon()` to accept optional `crop` and `stateSize` (backward-compatible)
+- [x] 3.3 Add `previewIcon()`, `installIcon()`, `listInstalledIcons()` to `src/api.ts`
 - [ ] 3.4 Create `src/hooks/useDebounce.ts` — generic debounce hook (300ms default)
 
 ## Phase 4: Frontend Components
