@@ -1,4 +1,5 @@
 pub mod image_processor;
+pub mod installer;
 pub mod path_detector;
 
 use std::path::Path;
@@ -9,7 +10,7 @@ fn detect_reaper_path() -> Result<path_detector::DetectionResult, String> {
 }
 
 #[tauri::command]
-fn process_icon(input_path: String, output_dir: String) -> Result<image_processor::OutputInfo, String> {
+fn process_icon(input_path: String, output_dir: String) -> Result<image_processor::ProcessingOutput, String> {
     let input = Path::new(&input_path);
     let filename = input
         .file_stem()
@@ -19,8 +20,14 @@ fn process_icon(input_path: String, output_dir: String) -> Result<image_processo
     let output = Path::new(&output_dir).join(output_name);
     let config = image_processor::IconConfig::default();
 
-    image_processor::generate_three_state(input, &output, &config)
-        .map_err(|e| e.to_string())
+    image_processor::generate_three_state(
+        input,
+        Some(&output),
+        &config,
+        None,
+        30,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
