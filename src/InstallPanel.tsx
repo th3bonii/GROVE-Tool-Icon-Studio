@@ -1,10 +1,12 @@
-import { useState } from 'react';
-
 interface InstallPanelProps {
   reaperPath: string | null;
   onInstall: (fileName: string) => void;
   installedIcons: string[];
   disabled: boolean;
+  iconName: string;
+  installEnabled: boolean;
+  onIconNameChange: (name: string) => void;
+  onInstallEnabledChange: (enabled: boolean) => void;
 }
 
 export default function InstallPanel({
@@ -12,19 +14,20 @@ export default function InstallPanel({
   onInstall,
   installedIcons,
   disabled,
+  iconName = '',
+  installEnabled = false,
+  onIconNameChange = () => {},
+  onInstallEnabledChange = () => {},
 }: InstallPanelProps) {
-  const [fileName, setFileName] = useState('');
-  const [installToReaper, setInstallToReaper] = useState(!!reaperPath);
-
   const canInstall =
     !disabled &&
     !!reaperPath &&
-    fileName.trim().length > 0 &&
-    installToReaper;
+    iconName.trim().length > 0 &&
+    installEnabled;
 
   const handleInstall = () => {
     if (!canInstall) return;
-    onInstall(fileName.trim());
+    onInstall(iconName.trim());
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -57,8 +60,8 @@ export default function InstallPanel({
           id="install-filename"
           type="text"
           placeholder="icon-name"
-          value={fileName}
-          onChange={(e) => setFileName(e.target.value)}
+          value={iconName}
+          onChange={(e) => onIconNameChange(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled || !reaperPath}
           style={{
@@ -91,8 +94,8 @@ export default function InstallPanel({
         >
           <input
             type="checkbox"
-            checked={installToReaper}
-            onChange={(e) => setInstallToReaper(e.target.checked)}
+            checked={installEnabled}
+            onChange={(e) => onInstallEnabledChange(e.target.checked)}
             disabled={!reaperPath}
           />
           Install to REAPER

@@ -49,23 +49,23 @@ Chain strategy: feature-branch-chain
 - [x] 3.1 Add `CropArea`, `ProcessingOutput` types to `src/api.ts` (matches Rust structs)
 - [x] 3.2 Extend `processIcon()` to accept optional `crop` and `stateSize` (backward-compatible)
 - [x] 3.3 Add `previewIcon()`, `installIcon()`, `listInstalledIcons()` to `src/api.ts`
-- [ ] 3.4 Create `src/hooks/useDebounce.ts` — generic debounce hook (300ms default)
+- [x] 3.4 Create `src/hooks/useDebounce.ts` — generic debounce hook (300ms default)
 
 ## Phase 4: Frontend Components
 
-- [ ] 4.1 Create `src/ImageCropper.tsx` — HTML canvas with mousedown/mousemove/mouseup drag rect, 1:1 aspect ratio clamp, emits `onCrop(CropArea | null)`
-- [ ] 4.2 Create `src/StatePreview.tsx` — debounced preview IPC call, renders 3 `<img>` states side-by-side with dimension labels
-- [ ] 4.3 Create `src/InstallPanel.tsx` — name input, install toggle, installed icons `<select>`, size selector (30/38), generate button
+- [x] 4.1 Create `src/ImageCropper.tsx` — HTML canvas with mousedown/mousemove/mouseup drag rect, 1:1 aspect ratio clamp, emits `onCrop(CropArea | null)`
+- [x] 4.2 Create `src/StatePreview.tsx` — debounced preview IPC call, renders 3 `<img>` states side-by-side with dimension labels
+- [x] 4.3 Create `src/InstallPanel.tsx` — name input, install toggle, installed icons `<select>`, size selector (30/38), generate button
 
 ## Phase 5: Integration & Wiring
 
-- [ ] 5.1 Refactor `src/App.tsx` — replace linear flow with ImageCropper + StatePreview + InstallPanel layout
-- [ ] 5.2 Add cropper, preview panel, install panel styles to `src/App.css`
-- [ ] 5.3 Wire full flow: file select → crop → preview (debounced) → generate → install
+- [x] 5.1 Refactor `src/App.tsx` — replace linear flow with ImageCropper + StatePreview + InstallPanel layout
+- [x] 5.2 Add cropper, preview panel, install panel styles to `src/App.css`
+- [x] 5.3 Wire full flow: file select → crop → preview (debounced) → generate → install
 
 ## Phase 6: Testing & Verification
 
 - [ ] 6.1 Verify `cargo test` passes — crop, state_size, preview mode, install_icon tests all green
 - [ ] 6.2 Write frontend tests: `ImageCropper` mouse events + `useDebounce` timing
-- [ ] 6.3 Update `src/__tests__/App.test.tsx` — mock new API surface, verify new UI sections render
-- [ ] 6.4 Run `npm run build` — verify TypeScript compilation and Vite bundling succeed
+- [x] 6.3 Update `src/__tests__/App.test.tsx` — mock new API surface, verify new UI sections render
+- [x] 6.4 Run `npm run build` — verify TypeScript compilation and Vite bundling succeed

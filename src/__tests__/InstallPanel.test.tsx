@@ -7,6 +7,10 @@ describe('InstallPanel', () => {
     onInstall: vi.fn(),
     installedIcons: ['existing-icon', 'another-icon'],
     disabled: false,
+    iconName: '',
+    installEnabled: false,
+    onIconNameChange: vi.fn(),
+    onInstallEnabledChange: vi.fn(),
   };
 
   it('renders the target path when reaperPath is provided', () => {
@@ -42,24 +46,32 @@ describe('InstallPanel', () => {
   it('calls onInstall with the file name when Install button is clicked', () => {
     const onInstall = vi.fn();
     render(
-      <InstallPanel {...baseProps} onInstall={onInstall} />,
+      <InstallPanel
+        {...baseProps}
+        onInstall={onInstall}
+        iconName="my-custom-icon"
+        installEnabled={true}
+      />,
     );
-
-    const input = screen.getByPlaceholderText('icon-name');
-    fireEvent.change(input, { target: { value: 'my-custom-icon' } });
 
     fireEvent.click(screen.getByRole('button', { name: /install/i }));
 
     expect(onInstall).toHaveBeenCalledWith('my-custom-icon');
   });
 
-  it('the input updates correctly when typing', () => {
-    render(<InstallPanel {...baseProps} />);
+  it('calls onIconNameChange when typing in the input', () => {
+    const onIconNameChange = vi.fn();
+    render(
+      <InstallPanel
+        {...baseProps}
+        onIconNameChange={onIconNameChange}
+      />,
+    );
 
-    const input = screen.getByPlaceholderText('icon-name') as HTMLInputElement;
+    const input = screen.getByPlaceholderText('icon-name');
     fireEvent.change(input, { target: { value: 'test-icon' } });
 
-    expect(input.value).toBe('test-icon');
+    expect(onIconNameChange).toHaveBeenCalledWith('test-icon');
   });
 
   it('disables the Install button when disabled prop is true', () => {
@@ -80,9 +92,8 @@ describe('InstallPanel', () => {
   });
 
   it('disables the Install button when file name is empty', () => {
-    render(<InstallPanel {...baseProps} />);
+    render(<InstallPanel {...baseProps} iconName="" />);
 
-    // Input is empty by default
     expect(screen.getByRole('button', { name: /install/i })).toBeDisabled();
   });
 
@@ -94,24 +105,34 @@ describe('InstallPanel', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the toggle checked by default when reaperPath exists', () => {
-    render(<InstallPanel {...baseProps} />);
+  it('renders the toggle checked when installEnabled is true', () => {
+    render(<InstallPanel {...baseProps} installEnabled={true} />);
 
     expect(
       screen.getByLabelText(/install to reaper/i),
     ).toBeChecked();
   });
 
-  it('renders the toggle unchecked when reaperPath is null', () => {
-    render(
-      <InstallPanel
-        {...baseProps}
-        reaperPath={null}
-      />,
-    );
+  it('renders the toggle unchecked when installEnabled is false', () => {
+    render(<InstallPanel {...baseProps} installEnabled={false} />);
 
     expect(
       screen.getByLabelText(/install to reaper/i),
     ).not.toBeChecked();
+  });
+
+  it('calls onInstallEnabledChange when toggling the checkbox', () => {
+    const onInstallEnabledChange = vi.fn();
+    render(
+      <InstallPanel
+        {...baseProps}
+        installEnabled={false}
+        onInstallEnabledChange={onInstallEnabledChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/install to reaper/i));
+
+    expect(onInstallEnabledChange).toHaveBeenCalledWith(true);
   });
 });
