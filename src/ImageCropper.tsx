@@ -7,30 +7,119 @@ interface ImageCropperProps {
 }
 
 const MIN_CROP_SIZE = 10;
+const HANDLE_SIZE = 8;
+const HIT_THRESHOLD = 10;
 const OVERLAY_ALPHA = 'rgba(0, 0, 0, 0.5)';
 const BORDER_COLOR = '#fff';
+const HANDLE_FILL = '#fff';
+const HANDLE_STROKE = '#333';
 const STROKE_WIDTH = 2;
 const LABEL_FONT = '14px sans-serif';
+
+type DragMode = 'idle' | 'draw' | 'move' | 'resize';
+type Corner = 'tl' | 'tr' | 'bl' | 'br';
+
+interface DragState {
+  mode: DragMode;
+  /** Corner being dragged in resize mode */
+  corner: Corner | null;
+  /** Mouse start position in canvas pixels */
+  startX: number;
+  startY: number;
+  /** Crop rect at the start of the drag */
+  origX: number;
+  origY: number;
+  origSize: number;
+}
+
+function makeDragState(): DragState {
+  return { mode: 'idle', corner: null, startX: 0, startY: 0, origX: 0, origY: 0, origSize: 0 };
+}
+
+/** Get the corner at (px, py) if within threshold, or null. */
+function hitTestCorner(
+  px: number, py: number,
+  crop: { x: number; y: number; size: number },
+): Corner | null {
+  const { x, y, size } = crop;
+  const corners: { corner: Corner; cx: number; cy: number }[] = [
+    { corner: 'tl', cx: x, cy: y },
+    { corner: 'tr', cx: x + size, cy: y },
+    { corner: 'bl', cx: x, cy: y + size },
+    { corner: 'br', cx: x + size, cy: y + size },
+  ];
+  for (const c of corners) {
+    if (Math.abs(px - c.cx) <= HIT_THRESHOLD && Math.abs(py - c.cy) <= HIT_THRESHOLD) {
+      return c.corner;
+    }
+  }
+  return null;
+}
+
+/** Check if (px, py) is inside the crop rect (excluding corner zones). */
+function insideRect(
+  px: number, py: number,
+  crop: { x: number; y: number; size: number },
+): boolean {
+  const margin = HIT_THRESHOLD;
+  return (
+    px >= crop.x + margin && px <= crop.x + crop.size - margin &&
+    py >= crop.y + margin && py <= crop.y + crop.size - margin
+  );
+}
+
+/** Map a corner to a CSS cursor name. */
+function cornerCursor(corner: Corner): string {
+  switch (corner) {
+    case 'tl': return 'nwse-resize';
+    case 'br': return 'nwse-resize';
+    case 'tr': return 'nesw-resize';
+    case 'bl': return 'nesw-resize';
+  }
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onCropChangeRef = useRef(onCropChange);
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const dragRef = useRef<{ active: boolean; startX: number; startY: number }>({
-    active: false,
-    startX: 0,
-    startY: 0,
-  });
+  const dragRef = useRef<DragState>(makeDragState());
   const currentCropRef = useRef<{ x: number; y: number; size: number } | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [cursor, setCursor] = useState('crosshair');
 
-  // Keep callback ref synchronised (avoids re-triggering effects on callback change)
   useEffect(() => {
     onCropChangeRef.current = onCropChange;
   });
 
-  // ── Drawing ────────────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  const emitCrop = useCallback((canvasCrop: { x: number; y: number; size: number }) => {
+    const img = imgRef.current;
+    const canvas = canvasRef.current;
+    if (!img || !canvas) return;
+    const scaleX = img.naturalWidth / canvas.width;
+    const scaleY = img.naturalHeight / canvas.height;
+    onCropChangeRef.current({
+      x: Math.round(canvasCrop.x * scaleX),
+      y: Math.round(canvasCrop.y * scaleY),
+      width: Math.round(canvasCrop.size * scaleX),
+      height: Math.round(canvasCrop.size * scaleY),
+    });
+  }, []);
+
+  const clampRect = useCallback((
+    x: number, y: number, size: number, canvasW: number, canvasH: number,
+  ) => {
+    const s = Math.max(MIN_CROP_SIZE, size);
+    const cx = Math.max(0, Math.min(x, canvasW - s));
+    const cy = Math.max(0, Math.min(y, canvasH - s));
+    return { x: cx, y: cy, size: Math.min(s, canvasW - cx, canvasH - cy) };
+  }, []);
+
+  // ── Drawing ─────────────────────────────────────────────────────────────────
 
   const drawScene = useCallback((cropX: number, cropY: number, cropSize: number) => {
     const canvas = canvasRef.current;
@@ -45,14 +134,10 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
 
     // Semi-transparent overlay around the crop rect (lightbox style)
     ctx.fillStyle = OVERLAY_ALPHA;
-    // Top strip
-    ctx.fillRect(0, 0, canvas.width, cropY);
-    // Left strip
-    ctx.fillRect(0, cropY, cropX, cropSize);
-    // Right strip
-    ctx.fillRect(cropX + cropSize, cropY, canvas.width - cropX - cropSize, cropSize);
-    // Bottom strip
-    ctx.fillRect(0, cropY + cropSize, canvas.width, canvas.height - cropY - cropSize);
+    ctx.fillRect(0, 0, canvas.width, cropY);                                           // top
+    ctx.fillRect(0, cropY, cropX, cropSize);                                            // left
+    ctx.fillRect(cropX + cropSize, cropY, canvas.width - cropX - cropSize, cropSize);   // right
+    ctx.fillRect(0, cropY + cropSize, canvas.width, canvas.height - cropY - cropSize);  // bottom
 
     // White border around crop rect
     ctx.strokeStyle = BORDER_COLOR;
@@ -66,9 +151,25 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     ctx.font = LABEL_FONT;
     ctx.textAlign = 'center';
     ctx.fillText(`${dimW}×${dimW}`, cropX + cropSize / 2, cropY - 8);
+
+    // Corner handles
+    const half = HANDLE_SIZE / 2;
+    const corners = [
+      { x: cropX - half, y: cropY - half },
+      { x: cropX + cropSize - half, y: cropY - half },
+      { x: cropX - half, y: cropY + cropSize - half },
+      { x: cropX + cropSize - half, y: cropY + cropSize - half },
+    ];
+    ctx.fillStyle = HANDLE_FILL;
+    ctx.strokeStyle = HANDLE_STROKE;
+    ctx.lineWidth = 1;
+    for (const h of corners) {
+      ctx.fillRect(h.x, h.y, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.strokeRect(h.x, h.y, HANDLE_SIZE, HANDLE_SIZE);
+    }
   }, []);
 
-  // ── Image loading ──────────────────────────────────────────────────────────
+  // ── Image loading ───────────────────────────────────────────────────────────
 
   useEffect(() => {
     const img = new Image();
@@ -77,18 +178,13 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
       setImageLoaded(true);
     };
     img.src = imageSrc;
-
-    return () => {
-      img.onload = null;
-    };
+    return () => { img.onload = null; };
   }, [imageSrc]);
 
-  // ── Canvas sizing + default crop ───────────────────────────────────────────
+  // ── Canvas sizing + default crop ────────────────────────────────────────────
 
   useEffect(() => {
-    if (!imageLoaded || !containerRef.current || !canvasRef.current || !imgRef.current) {
-      return;
-    }
+    if (!imageLoaded || !containerRef.current || !canvasRef.current || !imgRef.current) return;
 
     const img = imgRef.current;
     const container = containerRef.current;
@@ -103,31 +199,23 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     canvas.width = cw;
     canvas.height = ch;
 
-    // Default crop: centred, 80 % of the smaller original dimension
-    const rawCropSize = Math.min(img.naturalWidth, img.naturalHeight) * 0.8;
+    // Default crop: centred, full square of the smaller dimension (edge-to-edge)
+    const rawCropSize = Math.min(img.naturalWidth, img.naturalHeight) * 1.0;
     const rawCropX = (img.naturalWidth - rawCropSize) / 2;
     const rawCropY = (img.naturalHeight - rawCropSize) / 2;
 
-    // Convert default crop to canvas pixels
     const scaleX = cw / img.naturalWidth;
     const cCropX = Math.round(rawCropX * scaleX);
-    const cCropY = Math.round(rawCropY * scaleX); // same scale (1:1 aspect)
+    const cCropY = Math.round(rawCropY * scaleX);
     const cCropSize = Math.round(rawCropSize * scaleX);
 
     const defaultCrop = { x: cCropX, y: cCropY, size: cCropSize };
     currentCropRef.current = defaultCrop;
     drawScene(cCropX, cCropY, cCropSize);
+    emitCrop(defaultCrop);
+  }, [imageLoaded, drawScene, emitCrop]);
 
-    // Emit crop in original image coordinates
-    onCropChangeRef.current({
-      x: Math.round(rawCropX),
-      y: Math.round(rawCropY),
-      width: Math.round(rawCropSize),
-      height: Math.round(rawCropSize),
-    });
-  }, [imageLoaded, drawScene]);
-
-  // ── Coordinate conversion ──────────────────────────────────────────────────
+  // ── Coordinate conversion ───────────────────────────────────────────────────
 
   const getCanvasCoords = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -139,64 +227,156 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     };
   }, []);
 
-  // ── Mouse handlers ─────────────────────────────────────────────────────────
+  // ── Cursor on hover (no drag) ───────────────────────────────────────────────
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const pos = getCanvasCoords(e.clientX, e.clientY);
-      dragRef.current = { active: true, startX: pos.x, startY: pos.y };
-    },
-    [getCanvasCoords],
-  );
+  const updateCursor = useCallback((px: number, py: number) => {
+    const crop = currentCropRef.current;
+    if (!crop) { setCursor('crosshair'); return; }
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!dragRef.current.active) return;
-
-      const pos = getCanvasCoords(e.clientX, e.clientY);
-      const { startX, startY } = dragRef.current;
-      const dx = pos.x - startX;
-      const dy = pos.y - startY;
-
-      // Clamp to 1:1 aspect ratio and minimum size
-      let size = Math.max(Math.abs(dx), Math.abs(dy), MIN_CROP_SIZE);
-      let x = dx >= 0 ? startX : startX - size;
-      let y = dy >= 0 ? startY : startY - size;
-
-      // Clamp to canvas bounds
-      const canvas = canvasRef.current;
-      if (canvas) {
-        x = Math.max(0, Math.min(x, canvas.width - size));
-        y = Math.max(0, Math.min(y, canvas.height - size));
-      }
-
-      currentCropRef.current = { x, y, size };
-      drawScene(x, y, size);
-    },
-    [getCanvasCoords, drawScene],
-  );
-
-  const handleMouseUp = useCallback(() => {
-    if (!dragRef.current.active) return;
-    dragRef.current.active = false;
-
-    const finalCrop = currentCropRef.current;
-    const canvas = canvasRef.current;
-    const img = imgRef.current;
-    if (!finalCrop || !canvas || !img) return;
-
-    const scaleX = img.naturalWidth / canvas.width;
-    const scaleY = img.naturalHeight / canvas.height;
-
-    onCropChangeRef.current({
-      x: Math.round(finalCrop.x * scaleX),
-      y: Math.round(finalCrop.y * scaleY),
-      width: Math.round(finalCrop.size * scaleX),
-      height: Math.round(finalCrop.size * scaleY),
-    });
+    const corner = hitTestCorner(px, py, crop);
+    if (corner) { setCursor(cornerCursor(corner)); return; }
+    if (insideRect(px, py, crop)) { setCursor('move'); return; }
+    setCursor('crosshair');
   }, []);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Mouse handlers ──────────────────────────────────────────────────────────
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getCanvasCoords(e.clientX, e.clientY);
+    const crop = currentCropRef.current;
+    if (!crop) return;
+
+    const corner = hitTestCorner(pos.x, pos.y, crop);
+    if (corner) {
+      // Resize from corner
+      dragRef.current = {
+        mode: 'resize', corner,
+        startX: pos.x, startY: pos.y,
+        origX: crop.x, origY: crop.y, origSize: crop.size,
+      };
+      return;
+    }
+
+    if (insideRect(pos.x, pos.y, crop)) {
+      // Move
+      dragRef.current = {
+        mode: 'move', corner: null,
+        startX: pos.x, startY: pos.y,
+        origX: crop.x, origY: crop.y, origSize: crop.size,
+      };
+      return;
+    }
+
+    // Draw new
+    dragRef.current = {
+      mode: 'draw', corner: null,
+      startX: pos.x, startY: pos.y,
+      origX: pos.x, origY: pos.y, origSize: 0,
+    };
+  }, [getCanvasCoords]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getCanvasCoords(e.clientX, e.clientY);
+    const drag = dragRef.current;
+
+    if (drag.mode === 'idle') {
+      updateCursor(pos.x, pos.y);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (drag.mode === 'draw') {
+      const dx = pos.x - drag.startX;
+      const dy = pos.y - drag.startY;
+      let size = Math.max(Math.abs(dx), Math.abs(dy), MIN_CROP_SIZE);
+      let x = dx >= 0 ? drag.startX : drag.startX - size;
+      let y = dy >= 0 ? drag.startY : drag.startY - size;
+      const clamped = clampRect(x, y, size, canvas.width, canvas.height);
+      currentCropRef.current = clamped;
+      drawScene(clamped.x, clamped.y, clamped.size);
+      return;
+    }
+
+    if (drag.mode === 'move') {
+      const dx = pos.x - drag.startX;
+      const dy = pos.y - drag.startY;
+      const clamped = clampRect(
+        drag.origX + dx, drag.origY + dy, drag.origSize,
+        canvas.width, canvas.height,
+      );
+      currentCropRef.current = clamped;
+      drawScene(clamped.x, clamped.y, clamped.size);
+      return;
+    }
+
+    if (drag.mode === 'resize' && drag.corner) {
+      // The opposite corner stays fixed; size = max(|dx|, |dy|) for 1:1
+      const opposite = {
+        tl: { x: drag.origX + drag.origSize, y: drag.origY + drag.origSize },
+        tr: { x: drag.origX, y: drag.origY + drag.origSize },
+        bl: { x: drag.origX + drag.origSize, y: drag.origY },
+        br: { x: drag.origX, y: drag.origY },
+      }[drag.corner];
+
+      const size = Math.max(
+        Math.abs(pos.x - opposite.x), Math.abs(pos.y - opposite.y), MIN_CROP_SIZE,
+      );
+
+      // Determine top-left based on which corner is fixed
+      let x: number, y: number;
+      switch (drag.corner) {
+        case 'br': x = opposite.x; y = opposite.y; break;
+        case 'bl': x = opposite.x - size; y = opposite.y; break;
+        case 'tr': x = opposite.x; y = opposite.y - size; break;
+        case 'tl': x = opposite.x - size; y = opposite.y - size; break;
+      }
+
+      const clamped = clampRect(x, y, size, canvas.width, canvas.height);
+      currentCropRef.current = clamped;
+      drawScene(clamped.x, clamped.y, clamped.size);
+      return;
+    }
+  }, [getCanvasCoords, drawScene, clampRect, updateCursor]);
+
+  const handleMouseUp = useCallback(() => {
+    const drag = dragRef.current;
+    if (drag.mode === 'idle') return;
+
+    const finalCrop = currentCropRef.current;
+    dragRef.current = makeDragState();
+
+    if (finalCrop) emitCrop(finalCrop);
+  }, [emitCrop]);
+
+  // ── Keyboard handler ────────────────────────────────────────────────────────
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const crop = currentCropRef.current;
+    if (!crop) return;
+
+    const step = e.shiftKey ? 10 : 1;
+    let dx = 0, dy = 0;
+    switch (e.key) {
+      case 'ArrowUp': dy = -step; break;
+      case 'ArrowDown': dy = step; break;
+      case 'ArrowLeft': dx = -step; break;
+      case 'ArrowRight': dx = step; break;
+      default: return;
+    }
+    e.preventDefault();
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const clamped = clampRect(crop.x + dx, crop.y + dy, crop.size, canvas.width, canvas.height);
+    currentCropRef.current = clamped;
+    drawScene(clamped.x, clamped.y, clamped.size);
+    emitCrop(clamped);
+  }, [clampRect, drawScene, emitCrop]);
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -211,6 +391,10 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
       )}
       <canvas
         ref={canvasRef}
+        tabIndex={0}
+        role="application"
+        aria-label="Crop area. Use arrow keys to adjust."
+        onKeyDown={handleKeyDown}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -218,7 +402,7 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
         style={{
           display: imageLoaded ? 'block' : 'none',
           width: '100%',
-          cursor: 'crosshair',
+          cursor,
         }}
       />
     </div>
