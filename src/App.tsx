@@ -1,66 +1,48 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { detectReaperPath, processIcon, previewIcon, installIcon, listInstalledIcons } from './api';
-import type { DetectionResult, CropArea, ProcessingOutput } from './api';
+import type { CropArea } from './api';
 import ImageCropper from './ImageCropper';
 import StatePreview from './StatePreview';
 import InstallPanel from './InstallPanel';
 import { useDebounce } from './hooks/useDebounce';
+import { useReaperPath } from './hooks/useReaperPath';
+import { useIconPreview } from './hooks/useIconPreview';
+import { useIconProcessing } from './hooks/useIconProcessing';
+import { useIconInstall } from './hooks/useIconInstall';
 import './App.css';
 
 function App() {
-  const [reaperPath, setReaperPath] = useState<DetectionResult | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [crop, setCrop] = useState<CropArea | null>(null);
-  const [stateSize, setStateSize] = useState<30 | 38>(30);
-  const [previewBase64, setPreviewBase64] = useState<string | null>(null);
-  const [installEnabled, setInstallEnabled] = useState(false);
-  const [iconName, setIconName] = useState('');
-  const [installedIcons, setInstalledIcons] = useState<string[]>([]);
-  const [processing, setProcessing] = useState(false);
-  const [result, setResult] = useState<ProcessingOutput | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [padding, setPadding] = useState(2);
+  const [isToggle, setIsToggle] = useState(false);
 
+  // Hook 1: REAPER path detection + installed icons
+  const { reaperPath, installedIcons, setInstalledIcons, handleSelectReaperDir } = useReaperPath();
+
+  // Debounce crop, padding, isToggle for preview
   const debouncedCrop = useDebounce(crop, 300);
-  const debouncedStateSize = useDebounce(stateSize, 300);
+  const debouncedPadding = useDebounce(padding, 300);
+  const debouncedIsToggle = useDebounce(isToggle, 300);
 
-  // Auto-detect REAPER path on launch
-  useEffect(() => {
-    detectReaperPath()
-      .then(setReaperPath)
-      .catch((err) => setError(`Path detection failed: ${err}`));
-  }, []);
+  // Hook 2: Preview with cancel + error surfacing
+  const { previewResults, previewError, setPreviewResults } = useIconPreview(
+    selectedFile,
+    debouncedCrop,
+    debouncedPadding,
+    debouncedIsToggle,
+  );
 
-  // List installed icons when reaperPath resolves
-  useEffect(() => {
-    if (reaperPath?.path) {
-      listInstalledIcons(reaperPath.path)
-        .then(setInstalledIcons)
-        .catch(() => { /* silently ignore */ });
-    }
-  }, [reaperPath]);
+  // Hook 3: Processing state + error
+  const { processing, processResults, error: processError, setProcessResults, setError: setProcessError, handleGenerate: processAndGenerate } = useIconProcessing();
 
-  // Debounced preview: call previewIcon when crop or stateSize changes
-  useEffect(() => {
-    if (!selectedFile || !debouncedCrop) return;
-
-    let cancelled = false;
-    previewIcon(selectedFile, debouncedCrop, debouncedStateSize)
-      .then((res) => {
-        if (!cancelled) {
-          setPreviewBase64(res.preview_base64);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewBase64(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedFile, debouncedCrop, debouncedStateSize]);
+  // Hook 4: Install state + handlers
+  const { installEnabled, setInstallEnabled, iconName, setIconName, handleInstallAction, handleAutoInstall } = useIconInstall(
+    reaperPath?.path ?? null,
+    setInstalledIcons,
+  );
 
   const handleSelectFile = useCallback(async () => {
     const file = await open({
@@ -69,60 +51,33 @@ function App() {
     });
     if (file) {
       setSelectedFile(file);
-      setResult(null);
-      setError(null);
-      setPreviewBase64(null);
+      setProcessResults(null);
+      setProcessError(null);
+      setPreviewResults([]);
       setCrop(null);
       const assetUrl = convertFileSrc(file);
       setImageSrc(assetUrl);
     }
-  }, []);
+  }, [setProcessResults, setProcessError, setPreviewResults]);
 
-  const handleSelectReaperDir = useCallback(async () => {
-    const dir = await open({ directory: true, multiple: false });
-    if (dir) {
-      setReaperPath({ path: dir, method: 'Manual' });
-      setError(null);
+  // Generate: process icon then optionally auto-install
+  const handleGenerate = useCallback(async () => {
+    if (!selectedFile || !reaperPath?.path || !crop) return;
+
+    await processAndGenerate(selectedFile, reaperPath.path, crop, padding, isToggle);
+
+    if (installEnabled && iconName.trim()) {
+      await handleAutoInstall(selectedFile, reaperPath.path, crop, padding, isToggle);
     }
-  }, []);
+  }, [selectedFile, reaperPath, crop, padding, isToggle, installEnabled, iconName, processAndGenerate, handleAutoInstall]);
 
-  // Full pipeline: process + optionally install
-  const runPipeline = useCallback(
-    async (extraInstallName?: string) => {
-      if (!selectedFile || !reaperPath?.path || !crop) return;
+  // Install action from InstallPanel (adapted to hook interface)
+  const handleInstall = useCallback(async (fileName: string) => {
+    if (!selectedFile || !reaperPath?.path || !crop) return;
+    await handleInstallAction(selectedFile, crop, padding, isToggle, fileName);
+  }, [selectedFile, reaperPath, crop, padding, isToggle, handleInstallAction]);
 
-      setProcessing(true);
-      setError(null);
-      setResult(null);
-
-      try {
-        const res = await processIcon(selectedFile, reaperPath.path, crop, stateSize);
-        setResult(res);
-
-        // Install if enabled (either via checkbox or explicit Install button)
-        const nameToInstall = extraInstallName ?? (installEnabled ? iconName : '');
-        if (nameToInstall && res.output_path) {
-          await installIcon(res.output_path, reaperPath.path, nameToInstall);
-          // Refresh installed icons
-          const icons = await listInstalledIcons(reaperPath.path);
-          setInstalledIcons(icons);
-        }
-      } catch (err) {
-        setError(`Processing failed: ${err}`);
-      } finally {
-        setProcessing(false);
-      }
-    },
-    [selectedFile, reaperPath, crop, stateSize, installEnabled, iconName],
-  );
-
-  const handleGenerate = useCallback(() => runPipeline(), [runPipeline]);
-
-  const handleInstallAction = useCallback(
-    (fileName: string) => runPipeline(fileName),
-    [runPipeline],
-  );
-
+  const totalFiles = processResults ? processResults.length : 0;
   const canGenerate = !!selectedFile && !!reaperPath?.path && !!crop && !processing;
 
   return (
@@ -181,29 +136,48 @@ function App() {
         <section className="section" id="preview-section">
           <h2>Crop &amp; Preview</h2>
 
-          <StatePreview previewBase64={previewBase64} stateSize={stateSize} />
+          <StatePreview
+            previewResults={previewResults}
+            padding={padding}
+            isToggle={isToggle}
+          />
 
-          <div className="size-selector">
-            <span className="size-selector-label">State size:</span>
-            <label className="size-option">
-              <input
-                type="radio"
-                name="stateSize"
-                value={30}
-                checked={stateSize === 30}
-                onChange={() => setStateSize(30)}
-              />
-              Standard (30×30)
+          {previewError && <p className="error">{previewError}</p>}
+
+          {/* Padding slider */}
+          <div className="padding-slider">
+            <label className="padding-slider-label">
+              Padding: <strong>{padding}px</strong>
             </label>
-            <label className="size-option">
+            <div className="padding-slider-controls">
               <input
-                type="radio"
-                name="stateSize"
-                value={38}
-                checked={stateSize === 38}
-                onChange={() => setStateSize(38)}
+                type="range"
+                min={0}
+                max={4}
+                step={1}
+                value={padding}
+                onChange={(e) => setPadding(Number(e.target.value))}
+                className="padding-range"
               />
-              Double Width (38×38)
+              <div className="padding-marks">
+                <span>0</span>
+                <span>1</span>
+                <span>2</span>
+                <span>3</span>
+                <span>4</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Toggle checkbox */}
+          <div className="toggle-control">
+            <label className="toggle-label">
+              <input
+                type="checkbox"
+                checked={isToggle}
+                onChange={(e) => setIsToggle(e.target.checked)}
+              />
+              Generate ON/OFF toggle variant
             </label>
           </div>
         </section>
@@ -214,13 +188,14 @@ function App() {
         <section className="section" id="install-section">
           <InstallPanel
             reaperPath={reaperPath.path}
-            onInstall={handleInstallAction}
+            onInstall={handleInstall}
             installedIcons={installedIcons}
             disabled={processing || !selectedFile || !crop}
             iconName={iconName}
             installEnabled={installEnabled}
             onIconNameChange={setIconName}
             onInstallEnabledChange={setInstallEnabled}
+            isToggle={isToggle}
           />
         </section>
       )}
@@ -236,29 +211,34 @@ function App() {
           {processing ? 'Processing…' : 'Generate 3-State Icon'}
         </button>
 
-        {error && <p className="error">{error}</p>}
+        {processError && <p className="error">{processError}</p>}
 
-        {result && (
+        {processResults && processResults.length > 0 && (
           <div className="result">
             <p className="success">
               Icon generated{installEnabled && iconName ? ' and installed' : ''} successfully!
             </p>
-            <dl>
-              <dt>Output</dt>
-              <dd>
-                <code>
-                  {result.output_path
-                    ? result.output_path
-                    : result.preview_base64
-                      ? `${result.preview_base64.slice(0, 36)}…`
-                      : 'N/A'}
-                </code>
-              </dd>
-              <dt>Dimensions</dt>
-              <dd>
-                {result.width} × {result.height}px
-              </dd>
-            </dl>
+            <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
+              {totalFiles} file{totalFiles > 1 ? 's' : ''} generated across 3 scales
+            </p>
+            <div className="scale-summary">
+              {[30, 45, 60].map((scale) => {
+                const scaleResults = processResults.filter((r) => r.height === scale);
+                const dirLabel =
+                  scale === 30
+                    ? 'toolbar_icons/'
+                    : scale === 45
+                      ? 'toolbar_icons/150/'
+                      : 'toolbar_icons/200/';
+                return (
+                  <div key={scale} className="scale-entry">
+                    <span className="scale-size">{scale}×{scale}px</span>
+                    <span className="scale-count">{scaleResults.length} file(s)</span>
+                    <code className="scale-dir">{dirLabel}</code>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
