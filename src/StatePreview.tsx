@@ -1,90 +1,140 @@
+import type { ProcessingOutput } from './api';
+
 interface StatePreviewProps {
-  previewBase64: string | null;
-  stateSize: 30 | 38;
+  previewResults: ProcessingOutput[];
+  padding: number;
+  isToggle: boolean;
+  error?: string | null;
 }
 
 const DISPLAY_SCALE = 3;
+const STATE_LABELS = ['Normal', 'Hover', 'Active'];
 
-const labelStyle: React.CSSProperties = {
-  textAlign: 'center',
-  fontSize: '0.75rem',
-  color: 'var(--color-text-muted, #8899aa)',
-  marginTop: '4px',
-};
+function ensureDataUri(base64: string | null): string {
+  if (!base64) return '';
+  return base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+}
 
 export default function StatePreview({
-  previewBase64,
-  stateSize,
+  previewResults,
+  padding,
+  isToggle,
+  error,
 }: StatePreviewProps) {
-  if (!previewBase64) {
+  if (previewResults.length === 0) {
     return (
-      <div
-        className="state-preview-empty"
-        style={{
-          padding: '2rem',
-          textAlign: 'center',
-          color: 'var(--color-text-muted, #8899aa)',
-          border: '1px dashed var(--color-border, #0f3460)',
-          borderRadius: '8px',
-        }}
-      >
-        No preview available. Select an image and adjust the crop area.
+      <div className="state-preview-empty">
+        {error ? (
+          <p className="state-preview-empty-error">{error}</p>
+        ) : (
+          'No preview available. Select an image and adjust the crop area.'
+        )}
       </div>
     );
   }
 
-  const totalWidth = stateSize * 3 * DISPLAY_SCALE;
-  const totalHeight = stateSize * DISPLAY_SCALE;
+  // Group results by scale (strip height = scale size)
+  const scaleMap = new Map<number, { off?: ProcessingOutput; on?: ProcessingOutput }>();
+  for (const output of previewResults) {
+    const scale = output.height;
+    if (!scaleMap.has(scale)) scaleMap.set(scale, {});
+    const group = scaleMap.get(scale)!;
+    if (output.suffix === '_on') {
+      group.on = output;
+    } else {
+      group.off = output;
+    }
+  }
+
+  // Sort scales ascending
+  const sortedScales = Array.from(scaleMap.entries()).sort(([a], [b]) => a - b);
 
   return (
     <div className="state-preview">
-      <div
-        className="state-preview-image"
-        style={{ textAlign: 'center', marginBottom: '0.5rem' }}
-      >
-        <img
-          src={previewBase64}
-          alt="3-state icon preview"
-          style={{
-            width: `${totalWidth}px`,
-            height: `${totalHeight}px`,
-            imageRendering: 'pixelated',
-            borderRadius: '4px',
-            border: '1px solid var(--color-border, #0f3460)',
-          }}
-        />
-      </div>
+      {sortedScales.map(([scale, group]) => {
+        const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
+        const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
 
-      <div
-        className="state-preview-labels"
-        style={{
-          display: 'flex',
-          justifyContent: 'center',
-          gap: `${stateSize * DISPLAY_SCALE}px`,
-          marginBottom: '0.25rem',
-        }}
-      >
-        <div style={{ ...labelStyle, width: `${stateSize * DISPLAY_SCALE}px` }}>
-          Normal
-        </div>
-        <div style={{ ...labelStyle, width: `${stateSize * DISPLAY_SCALE}px` }}>
-          Hover
-        </div>
-        <div style={{ ...labelStyle, width: `${stateSize * DISPLAY_SCALE}px` }}>
-          Click
-        </div>
-      </div>
+        return (
+          <div key={scale} className="state-preview-scale">
+            <div className="state-preview-scale-header">
+              {scale}×{scale}px (padding: {padding}px)
+            </div>
 
-      <p
-        className="state-preview-dimensions"
-        style={{
-          textAlign: 'center',
-          fontSize: '0.7rem',
-          color: 'var(--color-text-muted, #8899aa)',
-        }}
-      >
-        {stateSize}×{stateSize} each · {stateSize * 3}×{stateSize} total
-      </p>
+            {/* OFF row */}
+            {group.off && (
+              <div className="state-preview-row">
+                <span className="state-preview-row-label">
+                  OFF
+                </span>
+                <div
+                  className="state-preview-states"
+                  style={{ gap: `${scale * 0.25}px` }}
+                >
+                  {STATE_LABELS.map((label, i) => (
+                    <div key={label} className="state-preview-state">
+                      <div
+                        className="state-icon"
+                        style={{
+                          width: `${scale * DISPLAY_SCALE}px`,
+                          height: `${scale * DISPLAY_SCALE}px`,
+                          backgroundImage: `url(${offSrc})`,
+                          backgroundSize: `${scale * 6 * DISPLAY_SCALE}px ${scale * DISPLAY_SCALE}px`,
+                          backgroundPosition: `${-i * scale * DISPLAY_SCALE}px 0`,
+                        }}
+                      />
+                      <div
+                        className="state-preview-state-label"
+                        style={{ width: `${scale * DISPLAY_SCALE}px` }}
+                      >
+                        {label}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ON row (only when toggle is enabled and ON variant exists) */}
+            {isToggle && group.on && (
+              <div className="state-preview-row state-preview-row--on">
+                <span className="state-preview-row-label state-preview-row-label--on">
+                  ON
+                </span>
+                <div
+                  className="state-preview-states"
+                  style={{ gap: `${scale * 0.25}px` }}
+                >
+                  {STATE_LABELS.map((label, i) => (
+                    <div key={label} className="state-preview-state">
+                      <div
+                        className="state-icon state-icon--on"
+                        style={{
+                          width: `${scale * DISPLAY_SCALE}px`,
+                          height: `${scale * DISPLAY_SCALE}px`,
+                          backgroundImage: `url(${onSrc})`,
+                          backgroundSize: `${scale * 6 * DISPLAY_SCALE}px ${scale * DISPLAY_SCALE}px`,
+                          backgroundPosition: `${-i * scale * DISPLAY_SCALE}px 0`,
+                        }}
+                      />
+                      <div
+                        className="state-preview-state-label"
+                        style={{ width: `${scale * DISPLAY_SCALE}px` }}
+                      >
+                        {label}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="state-preview-dimensions">
+              {scale}×{scale} each · {scale * 3}×{scale} per row
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -7,7 +7,14 @@ interface InstallPanelProps {
   installEnabled: boolean;
   onIconNameChange: (name: string) => void;
   onInstallEnabledChange: (enabled: boolean) => void;
+  isToggle: boolean;
 }
+
+const SCALE_DIRS = [
+  { label: '100%', scale: 30, pathSuffix: 'Data/toolbar_icons/' },
+  { label: '150%', scale: 45, pathSuffix: 'Data/toolbar_icons/150/' },
+  { label: '200%', scale: 60, pathSuffix: 'Data/toolbar_icons/200/' },
+] as const;
 
 export default function InstallPanel({
   reaperPath,
@@ -18,6 +25,7 @@ export default function InstallPanel({
   installEnabled = false,
   onIconNameChange = () => {},
   onInstallEnabledChange = () => {},
+  isToggle = false,
 }: InstallPanelProps) {
   const canInstall =
     !disabled &&
@@ -36,62 +44,32 @@ export default function InstallPanel({
     }
   };
 
+  const filesPerScale = isToggle ? 2 : 1;
+
   return (
     <div className="install-panel">
       <h2>Install to REAPER</h2>
 
       {/* File name input */}
-      <div
-        className="install-field"
-        style={{ marginBottom: '0.75rem' }}
-      >
-        <label
-          htmlFor="install-filename"
-          style={{
-            display: 'block',
-            fontSize: '0.8rem',
-            marginBottom: '0.25rem',
-            color: 'var(--color-text-muted, #8899aa)',
-          }}
-        >
+      <div className="install-field">
+        <label htmlFor="install-filename" className="install-field-label">
           Icon file name
         </label>
         <input
           id="install-filename"
           type="text"
+          className="install-filename-input"
           placeholder="icon-name"
           value={iconName}
           onChange={(e) => onIconNameChange(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled || !reaperPath}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            borderRadius: '6px',
-            border: '1px solid var(--color-border, #0f3460)',
-            background: 'var(--color-surface, #16213e)',
-            color: 'var(--color-text, #eee)',
-            fontFamily: 'inherit',
-            fontSize: '0.85rem',
-            boxSizing: 'border-box',
-          }}
         />
       </div>
 
       {/* Install to REAPER toggle */}
-      <div
-        className="install-toggle"
-        style={{ marginBottom: '0.75rem' }}
-      >
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.85rem',
-            cursor: 'pointer',
-          }}
-        >
+      <div className="install-toggle">
+        <label className="install-toggle-label">
           <input
             type="checkbox"
             checked={installEnabled}
@@ -104,72 +82,42 @@ export default function InstallPanel({
 
       {/* REAPER path info */}
       {reaperPath ? (
-        <div
-          className="install-path"
-          style={{
-            fontSize: '0.75rem',
-            color: 'var(--color-text-muted, #8899aa)',
-            marginBottom: '0.75rem',
-            wordBreak: 'break-all',
-          }}
-        >
-          Target:{' '}
-          <code
-            style={{
-              background: 'rgba(255,255,255,0.05)',
-              padding: '0.1rem 0.3rem',
-              borderRadius: '3px',
-            }}
-          >
-            {reaperPath}/Data/toolbar_icons/
-          </code>
+        <div className="install-scale-paths">
+          <p className="install-targets-heading">
+            Install Targets
+          </p>
+          {SCALE_DIRS.map((dir) => (
+            <div
+              key={dir.scale}
+              className="install-scale-row"
+            >
+              <span className="install-scale-badge">
+                {dir.label}
+              </span>
+              <code className="install-scale-path">
+                {reaperPath}/{dir.pathSuffix}
+              </code>
+              <span className="install-scale-count">
+                {filesPerScale} file{filesPerScale > 1 ? 's' : ''}
+              </span>
+            </div>
+          ))}
         </div>
       ) : (
-        <p
-          className="install-no-path"
-          style={{
-            fontSize: '0.75rem',
-            color: 'var(--color-error, #ff5252)',
-            marginBottom: '0.75rem',
-          }}
-        >
+        <p className="install-no-path">
           REAPER path not detected. Install will not be available.
         </p>
       )}
 
       {/* Installed icons list */}
       {installedIcons.length > 0 && (
-        <div
-          className="install-installed"
-          style={{ marginBottom: '0.75rem' }}
-        >
-          <p
-            style={{
-              fontSize: '0.75rem',
-              color: 'var(--color-text-muted, #8899aa)',
-              marginBottom: '0.25rem',
-            }}
-          >
+        <div className="install-installed-section">
+          <p className="install-installed-heading">
             Installed icons:
           </p>
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '0.25rem',
-            }}
-          >
+          <div className="install-installed-tags">
             {installedIcons.map((name) => (
-              <span
-                key={name}
-                style={{
-                  fontSize: '0.7rem',
-                  background: 'rgba(255,255,255,0.05)',
-                  padding: '0.15rem 0.4rem',
-                  borderRadius: '3px',
-                  color: 'var(--color-text-muted, #8899aa)',
-                }}
-              >
+              <span key={name} className="install-installed-tag">
                 {name}
               </span>
             ))}
@@ -179,24 +127,9 @@ export default function InstallPanel({
 
       {/* Install button */}
       <button
-        className="btn--primary"
+        className="btn--primary install-button"
         disabled={!canInstall}
         onClick={handleInstall}
-        style={{
-          width: '100%',
-          padding: '0.75rem',
-          fontSize: '0.9rem',
-          fontWeight: 600,
-          borderRadius: '8px',
-          border: '1px solid var(--color-primary, #e94560)',
-          background: canInstall
-            ? 'var(--color-primary, #e94560)'
-            : 'var(--color-surface, #16213e)',
-          color: canInstall ? '#fff' : 'var(--color-text-muted, #8899aa)',
-          cursor: canInstall ? 'pointer' : 'not-allowed',
-          opacity: canInstall ? 1 : 0.4,
-          transition: 'all 0.2s ease',
-        }}
       >
         Install
       </button>
