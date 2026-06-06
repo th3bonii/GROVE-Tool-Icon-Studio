@@ -140,9 +140,8 @@ function App() {
             previewResults={previewResults}
             padding={padding}
             isToggle={isToggle}
+            error={previewError}
           />
-
-          {previewError && <p className="error">{previewError}</p>}
 
           {/* Padding slider */}
           <div className="padding-slider">
