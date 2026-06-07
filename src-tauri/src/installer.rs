@@ -23,9 +23,9 @@ pub fn install_icon(
         ));
     }
 
-    let target_dir = reaper_resource_path.join("toolbar_icons");
+    let target_dir = reaper_resource_path.join("Data/toolbar_icons");
     std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("Failed to create toolbar_icons directory: {}", e))?;
+        .map_err(|e| format!("Failed to create Data/toolbar_icons directory: {}", e))?;
 
     let target_path = target_dir.join(format!("{}.png", target_name));
 
@@ -38,21 +38,19 @@ pub fn install_icon(
 /// List installed icon filenames (without extension) from REAPER's multi-scale
 /// toolbar_icons directory structure.
 ///
-/// Scans all 3 scale directories:
-/// - `toolbar_icons/` (100%)
-/// - `toolbar_icons/150/` (150%)
-/// - `toolbar_icons/200/` (200%)
+/// Scans all 3 scale directories using the shared `REAPER_SCALE_DIRS` constant:
+/// - `Data/toolbar_icons/` (100%)
+/// - `Data/toolbar_icons/150/` (150%)
+/// - `Data/toolbar_icons/200/` (200%)
 ///
 /// Returns filenames sorted alphabetically, with the `.png` extension stripped.
 /// Duplicate names across scales are deduplicated.
 pub fn list_installed_icons(
     reaper_resource_path: &Path,
 ) -> Result<Vec<String>, String> {
-    let dirs = [
-        reaper_resource_path.join("toolbar_icons"),
-        reaper_resource_path.join("toolbar_icons/150"),
-        reaper_resource_path.join("toolbar_icons/200"),
-    ];
+    let dirs: Vec<PathBuf> = image_processor::REAPER_SCALE_DIRS.iter()
+        .map(|sub_dir| reaper_resource_path.join(sub_dir))
+        .collect();
 
     let mut icons: BTreeSet<String> = BTreeSet::new();
 
@@ -116,11 +114,7 @@ pub fn install_icon_set(
 
     for (scale_idx, &_scale) in scales.iter().enumerate() {
         let sub_dir = scale_dirs.get(scale_idx).unwrap_or(&"");
-        let target_dir = if sub_dir.is_empty() {
-            reaper_resource_path.join("toolbar_icons")
-        } else {
-            reaper_resource_path.join("toolbar_icons").join(sub_dir)
-        };
+        let target_dir = reaper_resource_path.join(sub_dir);
 
         std::fs::create_dir_all(&target_dir)
             .map_err(|e| format!("Failed to create directory {:?}: {}", target_dir, e))?;
@@ -198,11 +192,7 @@ pub fn install_icon_set_raw(
 
     for (scale_idx, &_scale) in scales.iter().enumerate() {
         let sub_dir = scale_dirs.get(scale_idx).unwrap_or(&"");
-        let target_dir = if sub_dir.is_empty() {
-            reaper_resource_path.join("toolbar_icons")
-        } else {
-            reaper_resource_path.join("toolbar_icons").join(sub_dir)
-        };
+        let target_dir = reaper_resource_path.join(sub_dir);
 
         std::fs::create_dir_all(&target_dir)
             .map_err(|e| format!("Failed to create directory {:?}: {}", target_dir, e))?;
@@ -255,18 +245,17 @@ fn cleanup_temp_files(pending: &[(PathBuf, PathBuf)]) {
 
 /// Delete an icon from all 3 REAPER scale directories.
 ///
-/// Removes `icon_name.png` and `icon_name_on.png` from:
-/// - `toolbar_icons/` (100%)
-/// - `toolbar_icons/150/` (150%)
-/// - `toolbar_icons/200/` (200%)
+/// Removes `icon_name.png` and `icon_name_on.png` from all scale directories
+/// defined by the shared `REAPER_SCALE_DIRS` constant:
+/// - `Data/toolbar_icons/` (100%)
+/// - `Data/toolbar_icons/150/` (150%)
+/// - `Data/toolbar_icons/200/` (200%)
 ///
 /// Returns an error if no files were found to delete.
 pub fn delete_icon(reaper_resource_path: &Path, icon_name: &str) -> Result<(), String> {
-    let dirs: [PathBuf; 3] = [
-        reaper_resource_path.join("toolbar_icons"),
-        reaper_resource_path.join("toolbar_icons/150"),
-        reaper_resource_path.join("toolbar_icons/200"),
-    ];
+    let dirs: Vec<PathBuf> = image_processor::REAPER_SCALE_DIRS.iter()
+        .map(|sub_dir| reaper_resource_path.join(sub_dir))
+        .collect();
 
     let mut deleted_any = false;
     let mut errors = Vec::new();
@@ -300,11 +289,11 @@ pub fn delete_icon(reaper_resource_path: &Path, icon_name: &str) -> Result<(), S
     Ok(())
 }
 
-/// Read an icon strip file from the 100% toolbar_icons directory and return
+/// Read an icon strip file from the 100% Data/toolbar_icons directory and return
 /// its contents as a base64-encoded string.
 pub fn get_icon_strip(reaper_resource_path: &Path, icon_name: &str) -> Result<String, String> {
     let path = reaper_resource_path
-        .join("toolbar_icons")
+        .join("Data/toolbar_icons")
         .join(format!("{}.png", icon_name));
 
     if !path.exists() {
@@ -365,7 +354,7 @@ mod tests {
     fn install_icon_set_creates_three_directories() {
         let tmp = std::env::temp_dir().join("test_install_set_dirs");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let outputs = vec![
             make_base64_output(""),      // 100% OFF
@@ -378,15 +367,15 @@ mod tests {
         assert!(result.is_ok(), "install_icon_set should succeed");
 
         assert!(
-            reaper_res.join("toolbar_icons").exists(),
+            reaper_res.join("Data/toolbar_icons").exists(),
             "100% directory should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/150").exists(),
+            reaper_res.join("Data/toolbar_icons/150").exists(),
             "150% directory should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/200").exists(),
+            reaper_res.join("Data/toolbar_icons/200").exists(),
             "200% directory should exist"
         );
 
@@ -397,7 +386,7 @@ mod tests {
     fn install_icon_set_writes_correct_files_in_each_directory() {
         let tmp = std::env::temp_dir().join("test_install_set_files");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let outputs = vec![
             make_base64_output(""),      // 100% OFF
@@ -416,27 +405,27 @@ mod tests {
 
         // Check files exist in all three directories
         assert!(
-            reaper_res.join("toolbar_icons").join("myicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons").join("myicon.png").exists(),
             "100% OFF file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons").join("myicon_on.png").exists(),
+            reaper_res.join("Data/toolbar_icons").join("myicon_on.png").exists(),
             "100% ON file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/150").join("myicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons/150").join("myicon.png").exists(),
             "150% OFF file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/150").join("myicon_on.png").exists(),
+            reaper_res.join("Data/toolbar_icons/150").join("myicon_on.png").exists(),
             "150% ON file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/200").join("myicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons/200").join("myicon.png").exists(),
             "200% OFF file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/200").join("myicon_on.png").exists(),
+            reaper_res.join("Data/toolbar_icons/200").join("myicon_on.png").exists(),
             "200% ON file should exist"
         );
 
@@ -447,7 +436,7 @@ mod tests {
     fn install_icon_set_rejects_empty_name() {
         let tmp = std::env::temp_dir().join("test_install_set_empty");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let outputs = vec![make_base64_output("")];
         let result = install_icon_set(&outputs, &reaper_res, "", &[30u32]);
@@ -460,7 +449,7 @@ mod tests {
     fn install_icon_set_rejects_empty_outputs() {
         let tmp = std::env::temp_dir().join("test_install_set_no_output");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = install_icon_set(&[], &reaper_res, "icon", &[30u32]);
         assert!(result.is_err(), "No outputs should fail");
@@ -477,7 +466,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("test_install_atomic_rollback");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         // Two outputs, two scales → 1 per scale.
         // First output has valid base64 — writes to temp.
@@ -501,7 +490,7 @@ mod tests {
         assert!(result.is_err(), "Should fail on invalid base64");
 
         // Verify no final files exist (rollback should have cleaned up)
-        let toolbar = reaper_res.join("toolbar_icons");
+        let toolbar = reaper_res.join("Data/toolbar_icons");
         assert!(!toolbar.join("testicon.png").exists(),
             "No final file in 100%% dir after rollback");
 
@@ -528,13 +517,13 @@ mod tests {
     fn list_installed_icons_scans_all_three_dirs() {
         let tmp = std::env::temp_dir().join("test_list_3dirs");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         // Create files in all 3 directories
         let dirs = [
-            reaper_res.join("toolbar_icons"),
-            reaper_res.join("toolbar_icons/150"),
-            reaper_res.join("toolbar_icons/200"),
+            reaper_res.join("Data/toolbar_icons"),
+            reaper_res.join("Data/toolbar_icons/150"),
+            reaper_res.join("Data/toolbar_icons/200"),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir).unwrap();
@@ -562,13 +551,13 @@ mod tests {
     fn list_installed_icons_dedups_across_dirs() {
         let tmp = std::env::temp_dir().join("test_list_dedup");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         // Same icon name across all 3 dirs — should list once (deduped)
         let dirs = [
-            reaper_res.join("toolbar_icons"),
-            reaper_res.join("toolbar_icons/150"),
-            reaper_res.join("toolbar_icons/200"),
+            reaper_res.join("Data/toolbar_icons"),
+            reaper_res.join("Data/toolbar_icons/150"),
+            reaper_res.join("Data/toolbar_icons/200"),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir).unwrap();
@@ -592,16 +581,16 @@ mod tests {
     #[test]
     fn install_icon_creates_toolbar_icons_directory() {
         let (tmp_dir, source) = create_temp_dir("test_install_dir");
-        let toolbar = tmp_dir.join("toolbar_icons");
+        let toolbar = tmp_dir.join("Data/toolbar_icons");
 
-        // toolbar_icons does NOT exist yet
-        assert!(!toolbar.join("Data/toolbar_icons").exists());
+        // Data/toolbar_icons does NOT exist yet
+        assert!(!toolbar.exists());
 
-        let reaper_res = tmp_dir.join("Data");
+        let reaper_res = tmp_dir.clone();
         let result = install_icon(&source, &reaper_res, "myicon");
         assert!(result.is_ok(), "install_icon should succeed");
 
-        let expected = reaper_res.join("toolbar_icons").join("myicon.png");
+        let expected = reaper_res.join("Data/toolbar_icons").join("myicon.png");
         assert!(expected.exists(), "Icon file should exist at {:?}", expected);
         assert_eq!(result.unwrap(), expected, "Returned path should match");
 
@@ -611,7 +600,7 @@ mod tests {
     #[test]
     fn install_icon_copies_file_content_correctly() {
         let (tmp_dir, source) = create_temp_dir("test_install_content");
-        let reaper_res = tmp_dir.join("Data");
+        let reaper_res = tmp_dir.clone();
 
         let result = install_icon(&source, &reaper_res, "testicon");
         assert!(result.is_ok());
@@ -630,7 +619,7 @@ mod tests {
     #[test]
     fn install_icon_rejects_empty_name() {
         let (tmp_dir, source) = create_temp_dir("test_install_empty_name");
-        let reaper_res = tmp_dir.join("Data");
+        let reaper_res = tmp_dir.clone();
 
         let result = install_icon(&source, &reaper_res, "");
         assert!(result.is_err(), "Empty target name should fail");
@@ -642,7 +631,7 @@ mod tests {
     fn install_icon_rejects_nonexistent_source() {
         let tmp = std::env::temp_dir().join("test_install_missing_source");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
         let missing_source = tmp.join("does_not_exist.png");
 
         let result = install_icon(&missing_source, &reaper_res, "icon");
@@ -655,7 +644,7 @@ mod tests {
     fn list_installed_icons_returns_empty_for_new_directory() {
         let tmp = std::env::temp_dir().join("test_list_empty");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = list_installed_icons(&reaper_res);
         assert!(result.is_ok(), "list_installed_icons should succeed");
@@ -668,7 +657,7 @@ mod tests {
     #[test]
     fn list_installed_icons_returns_installed_icons_sorted() {
         let (tmp_dir, source) = create_temp_dir("test_list_populated");
-        let reaper_res = tmp_dir.join("Data");
+        let reaper_res = tmp_dir.clone();
 
         // Install a couple of icons
         install_icon(&source, &reaper_res, "beta").unwrap();
@@ -690,8 +679,8 @@ mod tests {
     #[test]
     fn list_installed_icons_filters_non_png_files() {
         let (tmp_dir, _source) = create_temp_dir("test_list_filter");
-        let reaper_res = tmp_dir.join("Data");
-        let toolbar = reaper_res.join("toolbar_icons");
+        let reaper_res = tmp_dir.clone();
+        let toolbar = reaper_res.join("Data/toolbar_icons");
         std::fs::create_dir_all(&toolbar).unwrap();
 
         // Create mixed files
@@ -717,10 +706,10 @@ mod tests {
     fn delete_icon_removes_from_all_three_dirs() {
         let tmp = std::env::temp_dir().join("test_delete_all_dirs");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         // Create icon in all 3 scale dirs
-        for dir in &["toolbar_icons", "toolbar_icons/150", "toolbar_icons/200"] {
+        for dir in &["Data/toolbar_icons", "Data/toolbar_icons/150", "Data/toolbar_icons/200"] {
             let d = reaper_res.join(dir);
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(d.join("myicon.png"), "fake_png").unwrap();
@@ -730,7 +719,7 @@ mod tests {
         assert!(result.is_ok(), "delete_icon should succeed");
 
         // Verify all 3 copies are gone
-        for dir in &["toolbar_icons", "toolbar_icons/150", "toolbar_icons/200"] {
+        for dir in &["Data/toolbar_icons", "Data/toolbar_icons/150", "Data/toolbar_icons/200"] {
             let p = reaper_res.join(dir).join("myicon.png");
             assert!(!p.exists(), "File should be deleted from {:?}", dir);
         }
@@ -742,9 +731,9 @@ mod tests {
     fn delete_icon_removes_on_variant() {
         let tmp = std::env::temp_dir().join("test_delete_on_var");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
-        let dir = reaper_res.join("toolbar_icons");
+        let dir = reaper_res.join("Data/toolbar_icons");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("myicon.png"), "fake_png").unwrap();
         std::fs::write(dir.join("myicon_on.png"), "fake_png").unwrap();
@@ -761,7 +750,7 @@ mod tests {
     fn delete_icon_non_existent_returns_error() {
         let tmp = std::env::temp_dir().join("test_delete_missing");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = delete_icon(&reaper_res, "nonexistent");
         assert!(result.is_err(), "Non-existent icon should return error");
@@ -781,9 +770,9 @@ mod tests {
     fn get_icon_strip_returns_base64_for_existing_icon() {
         let tmp = std::env::temp_dir().join("test_get_strip_exists");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
-        let dir = reaper_res.join("toolbar_icons");
+        let dir = reaper_res.join("Data/toolbar_icons");
         std::fs::create_dir_all(&dir).unwrap();
         // Write a minimal valid PNG (1x1 red pixel)
         let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
@@ -815,7 +804,7 @@ mod tests {
     fn get_icon_strip_non_existent_returns_error() {
         let tmp = std::env::temp_dir().join("test_get_strip_missing");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = get_icon_strip(&reaper_res, "imaginary");
         assert!(result.is_err(), "Non-existent icon should return error");
@@ -831,7 +820,7 @@ mod tests {
     fn get_icon_strip_empty_name_returns_file_not_found() {
         let tmp = std::env::temp_dir().join("test_get_strip_empty");
         std::fs::create_dir_all(&tmp).unwrap();
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = get_icon_strip(&reaper_res, "");
         assert!(result.is_err(), "Empty name should return error");

@@ -421,7 +421,7 @@ mod tests {
         let input_path = tmp.join("input.png");
         create_test_png(&input_path);
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = install_icon_set(
             input_path.to_string_lossy().to_string(),
@@ -439,15 +439,15 @@ mod tests {
         assert_eq!(result.len(), 3, "Should install 3 files");
 
         assert!(
-            reaper_res.join("toolbar_icons").join("testicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons").join("testicon.png").exists(),
             "100% file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/150").join("testicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons/150").join("testicon.png").exists(),
             "150% file should exist"
         );
         assert!(
-            reaper_res.join("toolbar_icons/200").join("testicon.png").exists(),
+            reaper_res.join("Data/toolbar_icons/200").join("testicon.png").exists(),
             "200% file should exist"
         );
 
@@ -462,7 +462,7 @@ mod tests {
         let input_path = tmp.join("input.png");
         create_test_png(&input_path);
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = install_icon_set(
             input_path.to_string_lossy().to_string(),
@@ -494,7 +494,7 @@ mod tests {
         let source_path = tmp.join("source.png");
         create_test_png(&source_path);
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
         std::fs::create_dir_all(&reaper_res).unwrap();
 
         let result = install_icon(
@@ -505,7 +505,7 @@ mod tests {
         .expect("install_icon IPC should succeed");
 
         let expected = reaper_res
-            .join("toolbar_icons")
+            .join("Data/toolbar_icons")
             .join("my_test_icon.png");
         assert!(
             expected.exists(),
@@ -528,7 +528,7 @@ mod tests {
         let source_path = tmp.join("source.png");
         create_test_png(&source_path);
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = install_icon(
             source_path.to_string_lossy().to_string(),
@@ -549,7 +549,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("grove_test_ipc_list_ms");
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         // Install alpha only in 100%
         let _ = installer::install_icon(
@@ -557,11 +557,11 @@ mod tests {
             &reaper_res, "alpha"
         );
         // Create beta only in 150%
-        let dir_150 = reaper_res.join("toolbar_icons/150");
+        let dir_150 = reaper_res.join("Data/toolbar_icons/150");
         std::fs::create_dir_all(&dir_150).unwrap();
         std::fs::write(dir_150.join("beta.png"), "fake_png").unwrap();
         // Create gamma only in 200%
-        let dir_200 = reaper_res.join("toolbar_icons/200");
+        let dir_200 = reaper_res.join("Data/toolbar_icons/200");
         std::fs::create_dir_all(&dir_200).unwrap();
         std::fs::write(dir_200.join("gamma.png"), "fake_png").unwrap();
 
@@ -580,7 +580,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("grove_test_ipc_list_empty");
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = list_installed_icons(reaper_res.to_string_lossy().to_string())
             .expect("list_installed_icons should succeed");
@@ -690,7 +690,7 @@ mod tests {
         let input_path = tmp.join("input.png");
         create_test_png(&input_path);
 
-        let reaper_res = tmp.join("Data");
+        let reaper_res = tmp.clone();
 
         let result = install_icon_set(
             input_path.to_string_lossy().to_string(),
