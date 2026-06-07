@@ -6,12 +6,14 @@ import ImageCropper from './ImageCropper';
 import StatePreview from './StatePreview';
 import HsbPanel from './HsbPanel';
 import InstallPanel from './InstallPanel';
+import BatchPanel from './BatchPanel';
 import { useDebounce } from './hooks/useDebounce';
 import { useReaperPath } from './hooks/useReaperPath';
 import { useIconPreview } from './hooks/useIconPreview';
 import { useIconProcessing } from './hooks/useIconProcessing';
 import { useIconInstall } from './hooks/useIconInstall';
 import { useHsbAdjustments } from './hooks/useHsbAdjustments';
+import { useBatchProcessing } from './hooks/useBatchProcessing';
 import './App.css';
 
 function App() {
@@ -21,6 +23,7 @@ function App() {
   const [padding, setPadding] = useState(2);
   const [isToggle, setIsToggle] = useState(false);
   const [viewMode, setViewMode] = useState<'states' | 'strips'>('states');
+  const [batchMode, setBatchMode] = useState(false);
 
   // HSB adjustment state
   const { offAdjustments, onAdjustments, updateOff, updateOn, resetAll } = useHsbAdjustments();
@@ -53,6 +56,17 @@ function App() {
   // State for installed icon preview
   const [previewStrip, setPreviewStrip] = useState<string | null>(null);
   const [previewIconName, setPreviewIconName] = useState<string | null>(null);
+
+  // Hook 5: Batch processing state
+  const {
+    files: batchFiles,
+    addFiles: batchAddFiles,
+    clearFiles: batchClearFiles,
+    removeFile: batchRemoveFile,
+    isProcessing: batchProcessing,
+    progress: batchProgress,
+    processAll: batchProcessAll,
+  } = useBatchProcessing();
 
   // Hook 4: Install state + handlers
   const { installEnabled, setInstallEnabled, iconName, setIconName, handleInstallAction, handleAutoInstall, handleDeleteIcon, handleExportIcon, handleGetStrip } = useIconInstall(
@@ -92,6 +106,28 @@ function App() {
     if (!selectedFile || !reaperPath?.path || !crop) return;
     await handleInstallAction(selectedFile, crop, padding, isToggle, fileName, offAdjustments, onAdjustments);
   }, [selectedFile, reaperPath, crop, padding, isToggle, offAdjustments, onAdjustments, handleInstallAction]);
+
+  // Batch file selector (multi-file)
+  const handleBatchAddFiles = useCallback(async () => {
+    const files = await open({
+      multiple: true,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] }],
+    });
+    if (files) {
+      const fileList = Array.isArray(files) ? files : [files];
+      batchAddFiles(fileList);
+      // Set the first file as selectedFile for preview
+      if (fileList.length > 0) {
+        setSelectedFile(fileList[0]);
+        setImageSrc(convertFileSrc(fileList[0]));
+      }
+    }
+  }, [batchAddFiles]);
+
+  // Batch process all files with current settings
+  const handleBatchProcessAll = useCallback(async () => {
+    await batchProcessAll(crop, padding, isToggle, offAdjustments, onAdjustments);
+  }, [batchProcessAll, crop, padding, isToggle, offAdjustments, onAdjustments]);
 
   const totalFiles = processResults ? processResults.length : 0;
   const canGenerate = !!selectedFile && !!reaperPath?.path && !!crop && !processing;
@@ -134,11 +170,40 @@ function App() {
 
       {/* Source Icon */}
       <section className="section" id="icon-input-section">
-        <h2>Source Icon</h2>
-        <button id="btn-select-icon" onClick={handleSelectFile}>
-          {selectedFile ? 'Change Icon' : 'Select Icon File'}
-        </button>
-        {selectedFile && <code className="file-path">{selectedFile}</code>}
+        <div className="section-header-row">
+          <h2>Source Icon</h2>
+          <label className="batch-toggle-label">
+            <input
+              type="checkbox"
+              className="batch-toggle-input"
+              checked={batchMode}
+              onChange={(e) => setBatchMode(e.target.checked)}
+              aria-label="Batch mode"
+            />
+            <span className="batch-toggle-switch" />
+            <span className="batch-toggle-text">Batch</span>
+          </label>
+        </div>
+
+        {batchMode ? (
+          <BatchPanel
+            files={batchFiles}
+            isProcessing={batchProcessing}
+            progress={batchProgress}
+            onAddFiles={handleBatchAddFiles}
+            onClearFiles={batchClearFiles}
+            onRemoveFile={batchRemoveFile}
+            onProcessAll={handleBatchProcessAll}
+            disabled={!crop}
+          />
+        ) : (
+          <>
+            <button id="btn-select-icon" onClick={handleSelectFile}>
+              {selectedFile ? 'Change Icon' : 'Select Icon File'}
+            </button>
+            {selectedFile && <code className="file-path">{selectedFile}</code>}
+          </>
+        )}
 
         {imageSrc && (
           <div className="cropper-section">
