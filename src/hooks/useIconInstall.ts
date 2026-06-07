@@ -1,14 +1,15 @@
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { installIconSet, listInstalledIcons, deleteIcon, getIconStrip, writeFile } from '../api';
 import type { CropArea, HsbAdjustment } from '../api';
 import { save } from '@tauri-apps/plugin-dialog';
+import { useLocalStorage } from './useLocalStorage';
 
 export function useIconInstall(
   reaperPath: string | null,
   setInstalledIcons: (icons: string[]) => void,
 ) {
-  const [installEnabled, setInstallEnabled] = useState(false);
-  const [iconName, setIconName] = useState('');
+  const [installEnabled, setInstallEnabled] = useLocalStorage('grove-installEnabled', false);
+  const [iconName, setIconName] = useLocalStorage('grove-iconName', '');
 
   const handleInstallAction = useCallback(async (
     selectedFile: string,

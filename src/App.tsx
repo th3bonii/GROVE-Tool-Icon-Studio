@@ -14,15 +14,16 @@ import { useIconProcessing } from './hooks/useIconProcessing';
 import { useIconInstall } from './hooks/useIconInstall';
 import { useHsbAdjustments } from './hooks/useHsbAdjustments';
 import { useBatchProcessing } from './hooks/useBatchProcessing';
+import { useLocalStorage } from './hooks/useLocalStorage';
 import './App.css';
 
 function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [crop, setCrop] = useState<CropArea | null>(null);
-  const [padding, setPadding] = useState(2);
-  const [isToggle, setIsToggle] = useState(false);
-  const [viewMode, setViewMode] = useState<'states' | 'strips'>('states');
+  const [padding, setPadding] = useLocalStorage('grove-padding', 2);
+  const [isToggle, setIsToggle] = useLocalStorage('grove-isToggle', false);
+  const [viewMode, setViewMode] = useLocalStorage<'states' | 'strips'>('grove-viewMode', 'states');
   const [batchMode, setBatchMode] = useState(false);
 
   // HSB adjustment state
