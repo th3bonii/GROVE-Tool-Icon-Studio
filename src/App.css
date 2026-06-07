@@ -600,6 +600,10 @@ button:disabled {
 
 /* ── State Preview ───────────────────────────────────────────────────── */
 
+.state-preview {
+  overflow-x: auto;
+}
+
 .state-preview-empty {
   padding: 2rem;
   text-align: center;
