@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 interface InstallPanelProps {
   reaperPath: string | null;
   onInstall: (fileName: string) => void;
@@ -8,6 +10,11 @@ interface InstallPanelProps {
   onIconNameChange: (name: string) => void;
   onInstallEnabledChange: (enabled: boolean) => void;
   isToggle: boolean;
+  onDelete?: (iconName: string) => void;
+  onExport?: (iconName: string) => void;
+  onPreview?: (iconName: string) => Promise<string | null>;
+  previewStrip?: string | null;
+  previewIconName?: string | null;
 }
 
 const SCALE_DIRS = [
@@ -15,6 +22,11 @@ const SCALE_DIRS = [
   { label: '150%', scale: 45, pathSuffix: 'Data/toolbar_icons/150/' },
   { label: '200%', scale: 60, pathSuffix: 'Data/toolbar_icons/200/' },
 ] as const;
+
+function ensureDataUri(base64: string | null): string {
+  if (!base64) return '';
+  return base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+}
 
 export default function InstallPanel({
   reaperPath,
@@ -26,7 +38,15 @@ export default function InstallPanel({
   onIconNameChange = () => {},
   onInstallEnabledChange = () => {},
   isToggle = false,
+  onDelete,
+  onExport,
+  onPreview,
+  previewStrip,
+  previewIconName,
 }: InstallPanelProps) {
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
+
   const canInstall =
     !disabled &&
     !!reaperPath &&
@@ -41,6 +61,31 @@ export default function InstallPanel({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && canInstall) {
       handleInstall();
+    }
+  };
+
+  const handleDeleteClick = (name: string) => {
+    setConfirmDelete(name);
+  };
+
+  const handleConfirmDelete = (name: string) => {
+    if (onDelete) {
+      onDelete(name);
+    }
+    setConfirmDelete(null);
+  };
+
+  const handleCancelDelete = () => {
+    setConfirmDelete(null);
+  };
+
+  const handlePreviewClick = async (name: string) => {
+    if (!onPreview) return;
+    setPreviewLoading(name);
+    try {
+      await onPreview(name);
+    } finally {
+      setPreviewLoading(null);
     }
   };
 
@@ -117,10 +162,74 @@ export default function InstallPanel({
           </p>
           <div className="install-installed-tags">
             {installedIcons.map((name) => (
-              <span key={name} className="install-installed-tag">
-                {name}
-              </span>
+              <div key={name} className="install-installed-item">
+                <span
+                  className="install-installed-tag install-installed-tag--clickable"
+                  onClick={() => handlePreviewClick(name)}
+                  title="Preview this icon"
+                >
+                  {name}
+                </span>
+                {previewLoading === name && (
+                  <span className="install-installed-loading">…</span>
+                )}
+                {onDelete && (
+                  <>
+                    {confirmDelete === name ? (
+                      <span className="install-installed-confirm">
+                        <button
+                          className="install-installed-confirm-yes"
+                          onClick={() => handleConfirmDelete(name)}
+                          title="Confirm delete"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          className="install-installed-confirm-no"
+                          onClick={handleCancelDelete}
+                          title="Cancel delete"
+                        >
+                          ✗
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="install-installed-btn install-installed-btn--delete"
+                        onClick={() => handleDeleteClick(name)}
+                        title="Delete icon"
+                      >
+                        🗑
+                      </button>
+                    )}
+                  </>
+                )}
+                {onExport && (
+                  <button
+                    className="install-installed-btn install-installed-btn--export"
+                    onClick={() => onExport(name)}
+                    title="Export icon"
+                  >
+                    📤
+                  </button>
+                )}
+              </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Preview strip for selected installed icon */}
+      {previewStrip && previewIconName && (
+        <div className="install-preview-strip-section">
+          <p className="install-preview-strip-heading">
+            Preview: {previewIconName}
+          </p>
+          <div className="install-preview-strip-container">
+            <img
+              className="install-preview-strip"
+              src={ensureDataUri(previewStrip)}
+              alt={`${previewIconName} strip`}
+            />
           </div>
         </div>
       )}
