@@ -5,9 +5,12 @@ interface StatePreviewProps {
   padding: number;
   isToggle: boolean;
   error?: string | null;
+  viewMode?: 'states' | 'strips';
+  onViewModeChange?: (mode: 'states' | 'strips') => void;
 }
 
 const DISPLAY_SCALE = 3;
+const STRIP_SCALE = 1.5;
 const STATE_LABELS = ['Normal', 'Hover', 'Active'];
 
 function ensureDataUri(base64: string | null): string {
@@ -20,6 +23,8 @@ export default function StatePreview({
   padding,
   isToggle,
   error,
+  viewMode = 'states',
+  onViewModeChange,
 }: StatePreviewProps) {
   if (previewResults.length === 0) {
     return (
@@ -51,6 +56,36 @@ export default function StatePreview({
 
   return (
     <div className="state-preview">
+      {/* View mode toggle */}
+      {onViewModeChange && (
+        <div className="state-preview-mode-toggle">
+          <button
+            className={`state-preview-mode-btn${viewMode === 'states' ? ' state-preview-mode-btn--active' : ''}`}
+            onClick={() => onViewModeChange('states')}
+          >
+            Per-State
+          </button>
+          <button
+            className={`state-preview-mode-btn${viewMode === 'strips' ? ' state-preview-mode-btn--active' : ''}`}
+            onClick={() => onViewModeChange('strips')}
+          >
+            Full Strip
+          </button>
+        </div>
+      )}
+
+      {viewMode === 'strips' ? renderStripView(sortedScales, padding, isToggle) : renderStateView(sortedScales, padding, isToggle)}
+    </div>
+  );
+}
+
+function renderStateView(
+  sortedScales: [number, { off?: ProcessingOutput; on?: ProcessingOutput }][],
+  padding: number,
+  isToggle: boolean,
+) {
+  return (
+    <>
       {sortedScales.map(([scale, group]) => {
         const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
         const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
@@ -135,6 +170,76 @@ export default function StatePreview({
           </div>
         );
       })}
-    </div>
+    </>
+  );
+}
+
+function renderStripView(
+  sortedScales: [number, { off?: ProcessingOutput; on?: ProcessingOutput }][],
+  _padding: number,
+  isToggle: boolean,
+) {
+  return (
+    <>
+      {sortedScales.map(([scale, group]) => {
+        const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
+        const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
+        const stripWidth = scale * 6;
+        const displayW = Math.round(stripWidth * STRIP_SCALE);
+        const displayH = Math.round(scale * STRIP_SCALE);
+
+        return (
+          <div key={scale} className="state-preview-scale">
+            <div className="state-preview-scale-header">
+              {scale}×{scale}px · {stripWidth}×{scale} strip · → icon.png
+            </div>
+
+            {/* OFF strip */}
+            {group.off && (
+              <div className="state-preview-row">
+                <span className="state-preview-row-label">
+                  OFF
+                </span>
+                <div className="state-preview-strip-container">
+                  <img
+                    className="state-preview-strip"
+                    src={offSrc}
+                    alt={`${scale}px OFF strip`}
+                    style={{
+                      width: `${displayW}px`,
+                      height: `${displayH}px`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ON strip (only when toggle is enabled) */}
+            {isToggle && group.on && (
+              <div className="state-preview-row state-preview-row--on">
+                <span className="state-preview-row-label state-preview-row-label--on">
+                  ON
+                </span>
+                <div className="state-preview-strip-container">
+                  <img
+                    className="state-preview-strip state-preview-strip--on"
+                    src={onSrc}
+                    alt={`${scale}px ON strip`}
+                    style={{
+                      width: `${displayW}px`,
+                      height: `${displayH}px`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <p className="state-preview-dimensions">
+              {scale}×{scale} each · {stripWidth}×{scale} strip · → icon.png
+            </p>
+          </div>
+        );
+      })}
+    </>
   );
 }

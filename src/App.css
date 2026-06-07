@@ -480,6 +480,124 @@ button:disabled {
   border-radius: var(--radius);
 }
 
+/* ── Installed icon management ────────────────────────────────────────── */
+
+.install-installed-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.15rem;
+}
+
+.install-installed-tag--clickable {
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.install-installed-tag--clickable:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--color-text);
+}
+
+.install-installed-loading {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  min-width: 1rem;
+}
+
+.install-installed-btn {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background var(--transition), color var(--transition);
+}
+
+.install-installed-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text);
+}
+
+.install-installed-btn--delete:hover {
+  background: rgba(255, 82, 82, 0.15);
+  color: var(--color-error);
+}
+
+.install-installed-btn--export:hover {
+  background: rgba(0, 200, 83, 0.15);
+  color: var(--color-success);
+}
+
+.install-installed-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.install-installed-confirm-yes,
+.install-installed-confirm-no {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.3rem;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background var(--transition);
+}
+
+.install-installed-confirm-yes {
+  background: rgba(0, 200, 83, 0.2);
+  color: var(--color-success);
+}
+
+.install-installed-confirm-yes:hover {
+  background: rgba(0, 200, 83, 0.4);
+}
+
+.install-installed-confirm-no {
+  background: rgba(255, 82, 82, 0.2);
+  color: var(--color-error);
+}
+
+.install-installed-confirm-no:hover {
+  background: rgba(255, 82, 82, 0.4);
+}
+
+/* ── Installed icon preview strip ─────────────────────────────────────── */
+
+.install-preview-strip-section {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.install-preview-strip-heading {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.install-preview-strip-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.install-preview-strip {
+  image-rendering: pixelated;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  max-width: 100%;
+  height: auto;
+}
+
 /* ── State Preview ───────────────────────────────────────────────────── */
 
 .state-preview-empty {
@@ -556,4 +674,169 @@ button:disabled {
   font-size: 0.7rem;
   color: var(--color-text-muted);
   margin-top: 0.25rem;
+}
+
+/* ── View mode toggle ─────────────────────────────────────────────────── */
+
+.state-preview-mode-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.state-preview-mode-btn {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.state-preview-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text);
+}
+
+.state-preview-mode-btn--active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.state-preview-mode-btn--active:hover {
+  background: var(--color-primary-hover);
+  color: #fff;
+}
+
+/* ── Strip view ───────────────────────────────────────────────────────── */
+
+.state-preview-strip-container {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+}
+
+.state-preview-strip {
+  image-rendering: pixelated;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  max-width: 100%;
+  height: auto;
+}
+
+.state-preview-strip--on {
+  border: 1px solid var(--color-primary);
+}
+
+/* ── HSB Panel ────────────────────────────────────────────────────────── */
+
+.hsb-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  min-width: 140px;
+}
+
+.hsb-panel-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+  text-align: center;
+}
+
+.hsb-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
+}
+
+.hsb-slider-row:last-child {
+  margin-bottom: 0;
+}
+
+.hsb-slider-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  min-width: 12px;
+  text-align: right;
+}
+
+.hsb-slider-row input[type='range'] {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--color-border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.hsb-slider-row input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-surface);
+  cursor: pointer;
+}
+
+.hsb-slider-row input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-surface);
+  cursor: pointer;
+}
+
+.hsb-slider-value {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text);
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── HSB Panel Grid ───────────────────────────────────────────────────── */
+
+.hsb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.hsb-grid-on {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.hsb-section-heading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.hsb-reset-btn {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.6rem;
 }
