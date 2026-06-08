@@ -9,9 +9,25 @@ interface StatePreviewProps {
   onViewModeChange?: (mode: 'states' | 'strips') => void;
 }
 
-const DISPLAY_SCALE = 3;
-const STRIP_SCALE = 1.5;
+/// Cap per-state display width so 3 states + gaps fit the preview area (~520px).
+const MAX_STATE_DISPLAY = 150;
+/// Cap strip display width to fit within the preview area.
+const MAX_STRIP_DISPLAY = 500;
+
 const STATE_LABELS = ['Normal', 'Hover', 'Active'];
+
+/// Compute a per-state display scale that never exceeds MAX_STATE_DISPLAY per state.
+function getDisplayScale(scaleNum: number): number {
+  const computed = Math.floor(MAX_STATE_DISPLAY / scaleNum);
+  return Math.max(1, Math.min(2, computed));
+}
+
+/// Compute a strip display scale that never exceeds MAX_STRIP_DISPLAY total width.
+function getStripScale(scaleNum: number): number {
+  const stripWidth = scaleNum * 3;
+  const computed = Math.floor(MAX_STRIP_DISPLAY / stripWidth * 10) / 10;
+  return Math.max(0.5, Math.min(1.5, computed));
+}
 
 function ensureDataUri(base64: string | null): string {
   if (!base64) return '';
@@ -94,6 +110,9 @@ function renderStateView(
           <div key={scale} className="state-preview-scale">
             <div className="state-preview-scale-header">
               {scale}×{scale}px (padding: {padding}px)
+              {' '}
+              {getDisplayScale(scale) === 1 && <span className="state-preview-size-note">(actual size)</span>}
+              {getDisplayScale(scale) === 2 && <span className="state-preview-size-note">(2× zoom)</span>}
             </div>
 
             {/* OFF row */}
@@ -111,16 +130,16 @@ function renderStateView(
                       <div
                         className="state-icon"
                         style={{
-                          width: `${scale * DISPLAY_SCALE}px`,
-                          height: `${scale * DISPLAY_SCALE}px`,
+                          width: `${scale * getDisplayScale(scale)}px`,
+                          height: `${scale * getDisplayScale(scale)}px`,
                           backgroundImage: `url(${offSrc})`,
-                          backgroundSize: `${scale * 6 * DISPLAY_SCALE}px ${scale * DISPLAY_SCALE}px`,
-                          backgroundPosition: `${-i * scale * DISPLAY_SCALE}px 0`,
+                          backgroundSize: `${scale * 3 * getDisplayScale(scale)}px ${scale * getDisplayScale(scale)}px`,
+                          backgroundPosition: `${-i * scale * getDisplayScale(scale)}px 0`,
                         }}
                       />
                       <div
                         className="state-preview-state-label"
-                        style={{ width: `${scale * DISPLAY_SCALE}px` }}
+                        style={{ width: `${scale * getDisplayScale(scale)}px` }}
                       >
                         {label}
                       </div>
@@ -145,16 +164,16 @@ function renderStateView(
                       <div
                         className="state-icon state-icon--on"
                         style={{
-                          width: `${scale * DISPLAY_SCALE}px`,
-                          height: `${scale * DISPLAY_SCALE}px`,
+                          width: `${scale * getDisplayScale(scale)}px`,
+                          height: `${scale * getDisplayScale(scale)}px`,
                           backgroundImage: `url(${onSrc})`,
-                          backgroundSize: `${scale * 6 * DISPLAY_SCALE}px ${scale * DISPLAY_SCALE}px`,
-                          backgroundPosition: `${-i * scale * DISPLAY_SCALE}px 0`,
+                          backgroundSize: `${scale * 3 * getDisplayScale(scale)}px ${scale * getDisplayScale(scale)}px`,
+                          backgroundPosition: `${-i * scale * getDisplayScale(scale)}px 0`,
                         }}
                       />
                       <div
                         className="state-preview-state-label"
-                        style={{ width: `${scale * DISPLAY_SCALE}px` }}
+                        style={{ width: `${scale * getDisplayScale(scale)}px` }}
                       >
                         {label}
                       </div>
@@ -184,14 +203,17 @@ function renderStripView(
       {sortedScales.map(([scale, group]) => {
         const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
         const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
-        const stripWidth = scale * 6;
-        const displayW = Math.round(stripWidth * STRIP_SCALE);
-        const displayH = Math.round(scale * STRIP_SCALE);
+        const stripWidth = scale * 3;
+        const displayW = Math.round(stripWidth * getStripScale(scale));
+        const displayH = Math.round(scale * getStripScale(scale));
 
         return (
           <div key={scale} className="state-preview-scale">
             <div className="state-preview-scale-header">
               {scale}×{scale}px · {stripWidth}×{scale} strip · → icon.png
+              {' '}
+              {getDisplayScale(scale) === 1 && <span className="state-preview-size-note">(actual size)</span>}
+              {getDisplayScale(scale) === 2 && <span className="state-preview-size-note">(2× zoom)</span>}
             </div>
 
             {/* OFF strip */}
