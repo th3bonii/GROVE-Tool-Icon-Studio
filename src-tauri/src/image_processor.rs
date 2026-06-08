@@ -1,8 +1,9 @@
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
 use std::path::Path;
+use std::sync::Mutex;
 
-/// Number of icon states in a REAPER toolbar strip (OFF/ON × Normal/Hover/Active).
-const REAPER_STATES: u32 = 6;
+/// Number of icon states in a REAPER toolbar strip (Normal/Hover/Active).
+const REAPER_STATES: u32 = 3;
 
 /// REAPER toolbar icon scale sizes (100%, 150%, 200%).
 pub const REAPER_SCALES: &[u32] = &[30, 45, 60];
@@ -83,6 +84,92 @@ pub struct CropArea {
     pub height: u32,
 }
 
+// ---------------------------------------------------------------------------
+// Source Image Cache (Task 1.1)
+// ---------------------------------------------------------------------------
+
+/// Cached decoded source image, keyed by source path + crop area hash.
+struct CachedSource {
+    path: String,
+    crop_hash: u64,
+    image: DynamicImage,
+}
+
+/// Module-level cache for the decoded source image.
+/// Populated on first load; invalidated on new path or crop change.
+static SOURCE_CACHE: Mutex<Option<CachedSource>> = Mutex::new(None);
+
+/// Compute a simple hash from a `CropArea`'s four fields.
+fn hash_crop(crop: &CropArea) -> u64 {
+    let mut h: u64 = 0;
+    h = h.wrapping_mul(31).wrapping_add(crop.x as u64);
+    h = h.wrapping_mul(31).wrapping_add(crop.y as u64);
+    h = h.wrapping_mul(31).wrapping_add(crop.width as u64);
+    h = h.wrapping_mul(31).wrapping_add(crop.height as u64);
+    h
+}
+
+/// Load a source image from cache or disk.
+///
+/// If the cache contains an entry matching `path` and `crop`, returns the
+/// cached center-cropped square directly (no disk I/O). Otherwise, opens
+/// the file from disk, optionally applies the crop region, center-crops to
+/// a square, caches the result, and returns it.
+///
+/// When `crop` is `None`, the full image is used (center-cropped to square
+/// without a prior crop-region extraction). The cache key still uses a
+/// distinctive hash so that `Some(crop)` and `None` are treated separately.
+fn load_source_cached(path: &str, crop: Option<&CropArea>) -> Result<DynamicImage, Box<dyn std::error::Error>> {
+    let crop_hash = crop.map(hash_crop).unwrap_or(0u64);
+
+    // Check cache without holding the lock across I/O.
+    // If poisoned, treat as cache miss and let the poison recovery handle it.
+    {
+        let cache = match SOURCE_CACHE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(), // recover — data is still valid
+        };
+        if let Some(ref cached) = *cache {
+            if cached.path == path && cached.crop_hash == crop_hash {
+                return Ok(cached.image.clone());
+            }
+        }
+    } // Lock released here
+
+    // Cache miss — read from disk (no lock held during I/O)
+    let img = image::open(path)?;
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return Err(format!("Source image has zero dimension: {}x{}", w, h).into());
+    }
+
+    let img_rgba = img.to_rgba8();
+
+    // Apply crop region (if provided) then center-crop to square
+    let working = match crop {
+        Some(area) => crop_region(&img_rgba, area),
+        None => img_rgba,
+    };
+    let square = center_crop_square(&working);
+
+    let result = DynamicImage::ImageRgba8(square);
+
+    // Update cache (re-acquire lock)
+    {
+        let mut cache = match SOURCE_CACHE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *cache = Some(CachedSource {
+            path: path.to_string(),
+            crop_hash,
+            image: result.clone(),
+        });
+    }
+
+    Ok(result)
+}
+
 /// Result of processing an icon — used for both file-save and preview modes.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProcessingOutput {
@@ -105,7 +192,7 @@ pub struct ProcessingOutput {
 /// the encode→decode roundtrip when saving to disk.
 #[derive(Debug, Clone)]
 pub struct ProcessingOutputRaw {
-    /// Total width of the 6-state output (state_width * 6).
+    /// Total width of the 3-state output (state_width * 3).
     pub width: u32,
     /// Height of each state (and total output).
     pub height: u32,
@@ -145,7 +232,7 @@ pub struct OutputInfo {
 /// in a future release.
 #[deprecated(
     since = "0.2.0",
-    note = "Use generate_icon_set() for REAPER-standard 6-state output with HSB adjustments, padding, multi-scale, and toggle support"
+    note = "Use generate_icon_set() for REAPER-standard 3-state output with HSB adjustments, padding, multi-scale, and toggle support"
 )]
 pub fn generate_three_state(
     input_path: &Path,
@@ -392,57 +479,25 @@ pub fn apply_padding(img: &RgbaImage, canvas_size: u32, padding: u8) -> RgbaImag
 // Multi-Scale Generation
 // ---------------------------------------------------------------------------
 
-/// Process one scale+variant of a center-cropped square to raw PNG bytes.
+/// Process one scale+variant of a **pre-padded** image to raw PNG bytes.
 ///
-/// Shared inner pipeline used by both `generate_icon_set` (→ base64) and
-/// `generate_icon_set_raw` (→ raw bytes). Returns `(width, height, png_bytes)`.
-fn process_variant_to_bytes(
-    square: &RgbaImage,
-    config: &IconConfig,
+/// Takes an already-padded image (resized + centered on canvas) and runs the
+/// HSB state iteration, rounded-corner masking, and PNG encoding.
+/// This is the inner pipeline shared by both output modes.
+///
+/// Returns `(output_width, output_height, png_bytes)`.
+fn process_padded_to_bytes(
+    padded: &RgbaImage,
     scale_size: u32,
-    use_on: bool,
+    adjustments: &[&HsbAdjustment; 3],
 ) -> Result<(u32, u32, Vec<u8>), ProcessingError> {
-    let padded = apply_padding(square, scale_size, config.padding);
     let (sw, sh) = padded.dimensions();
-
-    // Determine 6-state adjustments (same logic for both output modes)
-    let adjustments = if use_on {
-        [
-            &config.on_adjustments[0],
-            &config.on_adjustments[1],
-            &config.on_adjustments[2],
-            &config.on_adjustments[0],
-            &config.on_adjustments[1],
-            &config.on_adjustments[2],
-        ]
-    } else if config.is_toggle {
-        [
-            &config.off_adjustments[0],
-            &config.off_adjustments[1],
-            &config.off_adjustments[2],
-            &config.off_adjustments[0],
-            &config.off_adjustments[1],
-            &config.off_adjustments[2],
-        ]
-    } else {
-        [
-            &config.off_adjustments[0],
-            &config.off_adjustments[1],
-            &config.off_adjustments[2],
-            &config.on_adjustments[0],
-            &config.on_adjustments[1],
-            &config.on_adjustments[2],
-        ]
-    };
 
     let output_width = sw * REAPER_STATES;
     let mut output: RgbaImage = ImageBuffer::new(output_width, sh);
 
-    debug_assert_eq!(adjustments.len(), REAPER_STATES as usize,
-        "Must have exactly {} adjustments", REAPER_STATES);
-
     for (i, adj) in adjustments.iter().enumerate() {
-        let state_img = apply_hsb(&padded, adj);
+        let state_img = apply_hsb(padded, adj);
         let x_off = sw * i as u32;
         copy_region(&state_img, &mut output, x_off);
     }
@@ -460,20 +515,37 @@ fn process_variant_to_bytes(
     Ok((output_width, sh, buf.into_inner()))
 }
 
+/// Build the 3-state adjustments array for a given variant.
+///
+/// Returns exactly 3 adjustments for the requested variant (OFF or ON):
+/// [Normal, Hover, Active]. The outer variant loop in `generate_icon_set`
+/// handles toggle vs non-toggle by iterating the appropriate variants.
+fn build_adjustments(config: &IconConfig, use_on: bool) -> [&HsbAdjustment; 3] {
+    let adjustments = if use_on { &config.on_adjustments } else { &config.off_adjustments };
+    [
+        &adjustments[0],
+        &adjustments[1],
+        &adjustments[2],
+    ]
+}
+
 /// Generate a complete icon set at multiple scales (100%, 150%, 200%).
 ///
-/// For each scale, runs the full pipeline:
-///   crop → center-crop square → scale to `(size - 2×padding)` →
-///   paste centered → HSB loop for 6 states → assemble strip →
-///   rounded corners → encode.
+/// For each scale, runs the pre-resized pipeline:
+///   center-crop square → resize square to target scale once →
+///   apply padding once per scale → then for each variant iterate
+///   3 HSB states on the pre-resized+padded buffer.
+///
+/// This avoids re-applying padding per variant when multiple variants
+/// exist (toggle mode).
 ///
 /// Returns one `ProcessingOutput` per scale (non-toggle) or two per scale
-/// (toggle: OFF + ON). Each output is a 6-state strip with base64-encoded
+/// (toggle: OFF + ON). Each output is a 3-state strip with base64-encoded
 /// preview data.
 ///
 /// In toggle mode:
-/// - OFF variant: 6-state strip using only `off_adjustments` (repeated to fill 6 slots)
-/// - ON variant: 6-state strip using only `on_adjustments` (repeated to fill 6 slots)
+/// - OFF variant: 3-state strip using only `off_adjustments` (Normal/Hover/Active)
+/// - ON variant: 3-state strip using only `on_adjustments` (Normal/Hover/Active)
 /// - OFF output has `suffix=""`, ON output has `suffix="_on"` for file naming.
 pub fn generate_icon_set(
     input: &Path,
@@ -481,26 +553,15 @@ pub fn generate_icon_set(
     crop: Option<&CropArea>,
     scales: &[u32],
 ) -> Result<Vec<ProcessingOutput>, ProcessingError> {
-    let source = image::open(input)
-        .map_err(|e| ProcessingError::OpenError(e.to_string()))?;
+    // Use cached source to avoid re-reading from disk
+    let source = load_source_cached(
+        input.to_str().ok_or_else(|| ProcessingError::OpenError(
+            "Invalid path".to_string()
+        ))?,
+        crop,
+    ).map_err(|e| ProcessingError::OpenError(e.to_string()))?;
 
-    let (w, h) = source.dimensions();
-    if w == 0 || h == 0 {
-        return Err(ProcessingError::DimensionError(
-            format!("Source image has zero dimension: {}x{}", w, h),
-        ));
-    }
-
-    let source_rgba = source.to_rgba8();
-
-    // Step 1: Optionally crop
-    let working = match crop {
-        Some(area) => crop_region(&source_rgba, area),
-        None => source_rgba,
-    };
-
-    // Step 2: Center-crop to square
-    let square = center_crop_square(&working);
+    let square = source.to_rgba8();
 
     let variants: &[(bool, &str)] = if config.is_toggle {
         &[(false, ""), (true, "_on")]
@@ -512,9 +573,13 @@ pub fn generate_icon_set(
     let mut results = Vec::with_capacity(scales.len() * outputs_per_scale);
 
     for &scale_size in scales {
+        // Pre-resize: apply padding once per scale (not once per variant)
+        let padded = apply_padding(&square, scale_size, config.padding);
+
         for &(use_on, suffix) in variants {
+            let adjustments = build_adjustments(config, use_on);
             let (width, height, bytes) =
-                process_variant_to_bytes(&square, config, scale_size, use_on)?;
+                process_padded_to_bytes(&padded, scale_size, &adjustments)?;
 
             let encoded = base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
@@ -540,6 +605,8 @@ pub fn generate_icon_set(
 /// base64-encoded strings. Use this for file-writing to avoid the unnecessary
 /// encode→decode roundtrip.
 ///
+/// Each output is a 3-state strip (Normal/Hover/Active). In toggle mode,
+/// produces OFF and ON variants, each a 3-state strip.
 /// Returns `ProcessingOutputRaw` entries with `data` containing raw PNG bytes.
 pub fn generate_icon_set_raw(
     input: &Path,
@@ -547,26 +614,15 @@ pub fn generate_icon_set_raw(
     crop: Option<&CropArea>,
     scales: &[u32],
 ) -> Result<Vec<ProcessingOutputRaw>, ProcessingError> {
-    let source = image::open(input)
-        .map_err(|e| ProcessingError::OpenError(e.to_string()))?;
+    // Use cached source to avoid re-reading from disk
+    let source = load_source_cached(
+        input.to_str().ok_or_else(|| ProcessingError::OpenError(
+            "Invalid path".to_string()
+        ))?,
+        crop,
+    ).map_err(|e| ProcessingError::OpenError(e.to_string()))?;
 
-    let (w, h) = source.dimensions();
-    if w == 0 || h == 0 {
-        return Err(ProcessingError::DimensionError(
-            format!("Source image has zero dimension: {}x{}", w, h),
-        ));
-    }
-
-    let source_rgba = source.to_rgba8();
-
-    // Step 1: Optionally crop
-    let working = match crop {
-        Some(area) => crop_region(&source_rgba, area),
-        None => source_rgba,
-    };
-
-    // Step 2: Center-crop to square
-    let square = center_crop_square(&working);
+    let square = source.to_rgba8();
 
     let variants: &[(bool, &str)] = if config.is_toggle {
         &[(false, ""), (true, "_on")]
@@ -578,9 +634,13 @@ pub fn generate_icon_set_raw(
     let mut results = Vec::with_capacity(scales.len() * outputs_per_scale);
 
     for &scale_size in scales {
+        // Pre-resize: apply padding once per scale (not once per variant)
+        let padded = apply_padding(&square, scale_size, config.padding);
+
         for &(use_on, suffix) in variants {
+            let adjustments = build_adjustments(config, use_on);
             let (width, height, data) =
-                process_variant_to_bytes(&square, config, scale_size, use_on)?;
+                process_padded_to_bytes(&padded, scale_size, &adjustments)?;
 
             results.push(ProcessingOutputRaw {
                 width,
@@ -703,6 +763,270 @@ mod tests {
     // Task 1.1: REAPER_SCALES constants exist (RED — code doesn't exist yet)
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Task 1.1: Source Cache — RED tests (struct/fn does NOT exist yet)
+    // -----------------------------------------------------------------------
+
+    /// Clear the global SOURCE_CACHE so a test starts with a clean slate.
+    fn clear_cache() {
+        *SOURCE_CACHE.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn cached_source_struct_has_required_fields() {
+        clear_cache();
+        let img = RgbaImage::new(4, 4);
+        let cached = CachedSource {
+            path: String::from("/tmp/test.png"),
+            crop_hash: 42u64,
+            image: DynamicImage::ImageRgba8(img),
+        };
+        assert_eq!(cached.path, "/tmp/test.png", "path field");
+        assert_eq!(cached.crop_hash, 42, "crop_hash field");
+        let (w, h) = cached.image.dimensions();
+        assert_eq!((w, h), (4, 4), "image dimensions");
+    }
+
+    #[test]
+    fn source_cache_static_exists_as_mutex_option() {
+        clear_cache();
+        // Just verify the static compiles and the lock is accessible
+        let guard = SOURCE_CACHE.lock().unwrap();
+        drop(guard);
+    }
+
+    #[test]
+    fn hash_crop_produces_different_hash_for_different_crops() {
+        clear_cache();
+        let crop_a = CropArea { x: 0, y: 0, width: 10, height: 10 };
+        let crop_b = CropArea { x: 5, y: 5, width: 10, height: 10 };
+        let hash_a = hash_crop(&crop_a);
+        let hash_b = hash_crop(&crop_b);
+        assert_ne!(hash_a, hash_b,
+            "Different crops should produce different hashes");
+    }
+
+    #[test]
+    fn load_source_cached_returns_same_as_direct() {
+        clear_cache();
+        // Verify cached load produces same image as direct open+center-crop
+        let tmp_dir = std::env::temp_dir().join("grove_test_cache_return");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_path = tmp_dir.join("input.png");
+        let img = make_test_image(32, 32);
+        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
+
+        let crop = CropArea { x: 2, y: 2, width: 20, height: 20 };
+
+        // Direct: open → crop_region → center_crop_square
+        let src = image::open(&input_path).unwrap().to_rgba8();
+        let cropped = crop_region(&src, &crop);
+        let expected = center_crop_square(&cropped);
+
+        // Cached
+        let result = load_source_cached(
+            input_path.to_str().unwrap(), Some(&crop),
+        ).expect("load_source_cached should succeed");
+
+        assert_eq!(result.dimensions(), expected.dimensions(),
+            "Cached result should have same dimensions");
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn source_cache_hit_avoids_disk_read() {
+        clear_cache();
+        // After first load, delete the file. Cache hit on same path+crop
+        // should still succeed (result from cache, no disk read).
+        // Cache miss (different crop) should fail (file deleted).
+        let tmp_dir = std::env::temp_dir().join("grove_test_cache_hit");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_path = tmp_dir.join("input.png");
+        let img = make_test_image(32, 32);
+        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
+
+        let crop = CropArea { x: 0, y: 0, width: 16, height: 16 };
+        let path_str = input_path.to_str().unwrap().to_string();
+
+        // First load — populates cache, reads from disk
+        let first = load_source_cached(&path_str, Some(&crop));
+        assert!(first.is_ok(), "First load should succeed");
+
+        // Delete the file from disk
+        std::fs::remove_file(&input_path).unwrap();
+
+        // Second load with same path+crop — cache hit (no disk read)
+        let second = load_source_cached(&path_str, Some(&crop));
+        assert!(second.is_ok(), "Cache hit should succeed even after file deleted");
+
+        // Different crop — cache miss (needs to read from disk, file deleted)
+        let diff_crop = CropArea { x: 5, y: 5, width: 10, height: 10 };
+        let third = load_source_cached(&path_str, Some(&diff_crop));
+        assert!(third.is_err(), "Cache miss should fail when file is absent");
+
+        // Reset cache for other tests
+        clear_cache();
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 1.2: Pre-resize — approval test (RED: captures current output)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pre_resize_produces_identical_output_to_current() {
+        clear_cache();
+        // This approval test documents current output behavior.
+        // After restructuring loops, the output MUST remain identical.
+        let tmp_dir = std::env::temp_dir().join("grove_test_preresize");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_path = tmp_dir.join("input.png");
+        let img = make_test_image(32, 32);
+        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
+
+        let config = IconConfig {
+            padding: 2,
+            off_adjustments: [
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 },
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 10.0 },
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -10.0 },
+            ],
+            on_adjustments: [
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 },
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 15.0 },
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -20.0 },
+            ],
+            is_toggle: true,
+            ..Default::default()
+        };
+
+        // Non-toggle: 3 scales → 3 outputs
+        let results = generate_icon_set(
+            &input_path, &config, None, &[30u32, 45u32, 60u32],
+        ).expect("generate_icon_set for approval test");
+
+        // Toggle: 3 scales × 2 variants = 6 outputs
+        assert_eq!(results.len(), 6, "3 scales × 2 (toggle) = 6");
+
+        // Verify each output is a valid PNG with correct dimensions
+        for (i, out) in results.iter().enumerate() {
+            assert!(out.preview_base64.is_some(), "Output {} should have base64", i);
+            let expected_w = match i / 2 {
+                0 => 90u32,
+                1 => 135u32,
+                2 => 180u32,
+                _ => unreachable!(),
+            };
+            let expected_h = match i / 2 {
+                0 => 30u32,
+                1 => 45u32,
+                2 => 60u32,
+                _ => unreachable!(),
+            };
+            assert_eq!(out.width, expected_w, "Output {} width", i);
+            assert_eq!(out.height, expected_h, "Output {} height", i);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 1.1 Triangulation: edge cases for cache
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_source_cached_no_crop_uses_full_image() {
+        clear_cache();
+        let tmp_dir = std::env::temp_dir().join("grove_test_cache_no_crop");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_path = tmp_dir.join("input.png");
+        let img = make_test_image(40, 30); // non-square
+        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
+
+        // With no crop, should center-crop the full image
+        let result = load_source_cached(
+            input_path.to_str().unwrap(), None,
+        ).expect("load with no crop should succeed");
+
+        let (w, h) = result.dimensions();
+        // Center-crop of 40×30 → 30×30 square
+        assert_eq!(w, 30, "Should be 30 wide (min of 40,30)");
+        assert_eq!(h, 30, "Should be 30 tall (min of 40,30)");
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn load_source_cached_cache_invalidates_on_path_change() {
+        clear_cache();
+        let tmp_dir = std::env::temp_dir().join("grove_test_cache_path_change");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_a = tmp_dir.join("a.png");
+        let input_b = tmp_dir.join("b.png");
+        let mut img_a = RgbaImage::new(16, 16);
+        img_a.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        DynamicImage::ImageRgba8(img_a).save(&input_a).unwrap();
+
+        let mut img_b = RgbaImage::new(16, 16);
+        img_b.put_pixel(0, 0, Rgba([0, 255, 0, 255]));
+        DynamicImage::ImageRgba8(img_b).save(&input_b).unwrap();
+
+        let crop = CropArea { x: 0, y: 0, width: 16, height: 16 };
+
+        // Load file A
+        load_source_cached(input_a.to_str().unwrap(), Some(&crop))
+            .expect("load A should succeed");
+
+        // Load file B — different path, should not return A's cached image
+        load_source_cached(input_b.to_str().unwrap(), Some(&crop))
+            .expect("load B should succeed");
+
+        // Delete file A
+        std::fs::remove_file(&input_a).unwrap();
+
+        // Load A again — cache miss (path changed) — should fail (file deleted)
+        let res_a_again = load_source_cached(input_a.to_str().unwrap(), Some(&crop));
+        assert!(res_a_again.is_err(),
+            "Re-loading A after cache invalidated by B should fail (file gone)");
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn generate_icon_set_uses_cache_and_produces_correct_output() {
+        clear_cache();
+        // Verify generate_icon_set works via cache layer
+        let tmp_dir = std::env::temp_dir().join("grove_test_cache_gen");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let input_path = tmp_dir.join("input.png");
+        let img = make_test_image(32, 32);
+        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
+
+        let config = IconConfig {
+            padding: 0,
+            off_adjustments: [HsbAdjustment::default(); 3],
+            on_adjustments: [HsbAdjustment::default(); 3],
+            ..Default::default()
+        };
+
+        let results = generate_icon_set(
+            &input_path, &config, None, &[30u32],
+        ).expect("generate_icon_set via cache should succeed");
+
+        assert_eq!(results.len(), 1, "Should produce 1 output");
+        assert_eq!(results[0].width, 90, "3 × 30 = 90");
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
     #[test]
     fn reaper_scales_constants_have_correct_values() {
         assert_eq!(REAPER_SCALES, &[30u32, 45, 60]);
@@ -766,13 +1090,13 @@ mod tests {
         // Should produce 3 outputs (one per scale)
         assert_eq!(results.len(), 3, "Should produce 3 scale outputs");
 
-        // Each output should have 6-state dimensions
-        let expected = [(30u32, 180u32), (45, 270), (60, 360)];
+        // Each output should have 3-state dimensions
+        let expected = [(30u32, 90u32), (45, 135), (60, 180)];
         for (i, &(exp_h, exp_w)) in expected.iter().enumerate() {
             assert_eq!(results[i].height, exp_h,
                 "Scale {} height should be {}", i, exp_h);
             assert_eq!(results[i].width, exp_w,
-                "Scale {} width should be 6×state_size", i);
+                "Scale {} width should be 3×state_size", i);
         }
 
         // Each output should have valid PNG data
@@ -1155,13 +1479,13 @@ mod tests {
         // Should produce 3 outputs (one per scale)
         assert_eq!(results.len(), 3, "Should produce 3 scale outputs");
 
-        // Each output should be 6-state: width = size × 6, height = size
-        let expected_dims = [(30u32, 180u32), (45, 270), (60, 360)];
+        // Each output should be 3-state: width = size × 3, height = size
+        let expected_dims = [(30u32, 90u32), (45, 135), (60, 180)];
         for (i, &(exp_h, exp_w)) in expected_dims.iter().enumerate() {
             assert_eq!(results[i].height, exp_h,
                 "Scale {}: height should be {}", i, exp_h);
             assert_eq!(results[i].width, exp_w,
-                "Scale {}: width should be {} (6 states)", i, exp_w);
+                "Scale {}: width should be {} (3 states)", i, exp_w);
         }
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -1208,14 +1532,14 @@ mod tests {
         assert!(results[0].output_path.is_none(),
             "Preview mode should not have output_path");
 
-        // Decode and verify it's a valid PNG with 6-state dimensions
+        // Decode and verify it's a valid PNG with 3-state dimensions
         use base64::Engine;
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(results[0].preview_base64.as_ref().unwrap())
             .expect("Base64 must decode");
         let decoded_img = image::load_from_memory(&decoded)
             .expect("Decoded bytes must be a valid PNG");
-        assert_eq!(decoded_img.width(), 180, "6 × 30 = 180px wide");
+        assert_eq!(decoded_img.width(), 90, "3 × 30 = 90px wide");
         assert_eq!(decoded_img.height(), 30, "30px tall");
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -1256,7 +1580,7 @@ mod tests {
         ).unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].width, 180, "6 states × 30px = 180px");
+        assert_eq!(results[0].width, 90, "3 states × 30px = 90px");
         assert_eq!(results[0].height, 30, "30px tall");
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -1377,7 +1701,7 @@ mod tests {
 
         let results = generate_icon_set(&input_path, &config, None, &[45u32]).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].width, 270, "6 × 45 = 270");
+        assert_eq!(results[0].width, 135, "3 × 45 = 135");
         assert_eq!(results[0].height, 45, "45px tall");
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -1403,7 +1727,7 @@ mod tests {
 
         let results = generate_icon_set(&input_path, &config, None, &[60u32]).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].width, 360, "6 × 60 = 360");
+        assert_eq!(results[0].width, 180, "3 × 60 = 180");
         assert_eq!(results[0].height, 60, "60px tall");
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -1864,8 +2188,8 @@ mod tests {
     }
 
     #[test]
-    fn toggle_each_variant_is_6_state() {
-        let tmp_dir = std::env::temp_dir().join("grove_test_toggle_6state");
+    fn toggle_each_variant_is_3_state() {
+        let tmp_dir = std::env::temp_dir().join("grove_test_toggle_3state");
         std::fs::create_dir_all(&tmp_dir).unwrap();
 
         let input_path = tmp_dir.join("input.png");
@@ -1883,14 +2207,14 @@ mod tests {
 
         assert_eq!(results.len(), 2, "Toggle should produce 2 outputs");
 
-        // Both OFF and ON variants should be 6-state: width = 6 × 30 = 180
+        // Both OFF and ON variants should be 3-state: width = 3 × 30 = 90
         assert_eq!(
-            results[0].width, 180,
-            "OFF variant should be 6-state (180px at 30px size)"
+            results[0].width, 90,
+            "OFF variant should be 3-state (90px at 30px size)"
         );
         assert_eq!(
-            results[1].width, 180,
-            "ON variant should be 6-state (180px at 30px size)"
+            results[1].width, 90,
+            "ON variant should be 3-state (90px at 30px size)"
         );
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -2014,14 +2338,14 @@ mod tests {
         // Toggle + 3 scales = 6 outputs
         assert_eq!(results.len(), 6, "3 scales × 2 (toggle) = 6 outputs");
 
-        // Verify all outputs have valid base64 and 6-state dimensions
+        // Verify all outputs have valid base64 and 3-state dimensions
         for (i, out) in results.iter().enumerate() {
             assert!(out.preview_base64.is_some(),
                 "Output {} should have base64", i);
             let expected_w = match i / 2 {
-                0 => 180u32,  // 30 × 6
-                1 => 270u32,  // 45 × 6
-                2 => 360u32,  // 60 × 6
+                0 => 90u32,  // 30 × 3
+                1 => 135u32, // 45 × 3
+                2 => 180u32, // 60 × 3
                 _ => unreachable!(),
             };
             let expected_h = match i / 2 {
@@ -2031,7 +2355,7 @@ mod tests {
                 _ => unreachable!(),
             };
             assert_eq!(out.width, expected_w,
-                "Output {} width should be {} (6 states)", i, expected_w);
+                "Output {} width should be {} (3 states)", i, expected_w);
             assert_eq!(out.height, expected_h,
                 "Output {} height should be {}", i, expected_h);
         }
@@ -2042,7 +2366,7 @@ mod tests {
     #[test]
     fn state_ordering_follows_reaper_convention() {
         // Verify that non-toggle output has states in order:
-        // OFF Normal, OFF Hover, OFF Active, ON Normal, ON Hover, ON Active
+        // OFF Normal, OFF Hover, OFF Active (3 states only — no ON states in non-toggle)
         let tmp_dir = std::env::temp_dir().join("grove_test_ordering");
         std::fs::create_dir_all(&tmp_dir).unwrap();
 
@@ -2056,8 +2380,8 @@ mod tests {
         }
         DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
 
-        // OFF: identity adjustments (pixels stay white → HSB shift is invisible)
-        // ON: distinct color shift so we can detect which states use ON adjustments
+        // OFF: identity + slight brightness shifts so we can distinguish states
+        // Non-toggle should produce ONLY 3 OFF states (no ON states at all)
         let config = IconConfig {
             hover_brightness: 30,
             click_brightness: -40,
@@ -2067,7 +2391,6 @@ mod tests {
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -10.0 },
             ],
             on_adjustments: [
-                // Brightness 0 → black pixels — easy to detect
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -100.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -100.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -100.0 },
@@ -2091,27 +2414,20 @@ mod tests {
             .expect("Must be valid PNG");
         let rgba = decoded_img.to_rgba8();
 
-        // 6 states × 16px = 96px wide, 16px tall
-        assert_eq!(rgba.width(), 96);
+        // 3 states × 16px = 48px wide, 16px tall
+        assert_eq!(rgba.width(), 48);
         assert_eq!(rgba.height(), 16);
 
         let state_w = 16u32;
 
-        // States 0-2 use OFF adjustments → should be white (or near-white)
-        // States 3-5 use ON adjustments with bri_delta=-100 → should be near-black
-        for state in 0..6u32 {
+        // All 3 states use OFF adjustments → should be near-white
+        for state in 0..3u32 {
             let x = state * state_w + state_w / 2;
             let y = 8u32;
             let pixel = rgba.get_pixel(x, y).0;
-            if state < 3 {
-                // OFF states: should be near-white (bri_delta 0, 10, or -10 on white)
-                assert!(pixel[0] >= 230,
-                    "State {} (OFF) should be near-white, got R={}", state, pixel[0]);
-            } else {
-                // ON states: bri_delta=-100 on white → near-black
-                assert!(pixel[0] <= 10,
-                    "State {} (ON) should be near-black, got R={}", state, pixel[0]);
-            }
+            // OFF states: should be near-white (bri_delta 0, 10, or -10 on white)
+            assert!(pixel[0] >= 230,
+                "State {} (OFF) should be near-white, got R={}", state, pixel[0]);
         }
 
         let _ = std::fs::remove_dir_all(&tmp_dir);

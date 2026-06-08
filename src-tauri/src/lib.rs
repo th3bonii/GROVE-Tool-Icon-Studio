@@ -10,7 +10,7 @@ fn detect_reaper_path() -> Result<path_detector::DetectionResult, String> {
 }
 
 #[tauri::command]
-fn process_icon(
+async fn process_icon(
     input_path: String,
     output_dir: String,
     crop: Option<image_processor::CropArea>,
@@ -19,57 +19,69 @@ fn process_icon(
     off_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
     on_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
 ) -> Result<Vec<image_processor::ProcessingOutput>, String> {
-    let input = Path::new(&input_path);
-    let filename = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("icon");
+    let input_path_owned = input_path.clone();
+    let output_dir_owned = output_dir.clone();
 
-    let mut config = image_processor::IconConfig {
-        padding: padding.unwrap_or(2),
-        is_toggle: is_toggle.unwrap_or(false),
-        ..Default::default()
-    };
-    if let Some(adj) = off_adjustments {
-        config.off_adjustments = adj;
-    }
-    if let Some(adj) = on_adjustments {
-        config.on_adjustments = adj;
-    }
+    let result = tokio::task::spawn_blocking(move || {
+        let input = Path::new(&input_path_owned);
+        let filename = input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("icon")
+            .to_string();
 
-    // Use raw output mode to avoid encode→decode roundtrip
-    let results = image_processor::generate_icon_set_raw(input, &config, crop.as_ref(), image_processor::REAPER_SCALES)
-        .map_err(|e| e.to_string())?;
+        let mut config = image_processor::IconConfig {
+            padding: padding.unwrap_or(2),
+            is_toggle: is_toggle.unwrap_or(false),
+            ..Default::default()
+        };
+        if let Some(adj) = off_adjustments {
+            config.off_adjustments = adj;
+        }
+        if let Some(adj) = on_adjustments {
+            config.on_adjustments = adj;
+        }
 
-    // Write raw bytes directly to disk
-    let written: Vec<image_processor::ProcessingOutput> = results
-        .into_iter()
-        .map(|output| {
-            let suffix = &output.suffix;
-            let output_name = if suffix.is_empty() {
-                format!("{}.png", filename)
-            } else {
-                format!("{}{}.png", filename, suffix)
-            };
-            let output_path = Path::new(&output_dir).join(&output_name);
+        // Use raw output mode to avoid encode→decode roundtrip
+        let results = image_processor::generate_icon_set_raw(
+            input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
+        ).map_err(|e| e.to_string())?;
 
-            let _ = std::fs::write(&output_path, &output.data);
+        // Write raw bytes directly to disk
+        let written: Vec<image_processor::ProcessingOutput> = results
+            .into_iter()
+            .map(|output| {
+                let suffix = &output.suffix;
+                let output_name = if suffix.is_empty() {
+                    format!("{}.png", filename)
+                } else {
+                    format!("{}{}.png", filename, suffix)
+                };
+                let output_path = Path::new(&output_dir_owned).join(&output_name);
 
-            image_processor::ProcessingOutput {
-                width: output.width,
-                height: output.height,
-                output_path: Some(output_path),
-                preview_base64: None,
-                suffix: output.suffix,
-            }
-        })
-        .collect();
+                eprintln!("[process_icon] writing {} ({}x{})", output_path.display(), output.width, output.height);
+                if let Err(e) = std::fs::write(&output_path, &output.data) {
+                    eprintln!("[process_icon] FAILED to write {}: {}", output_path.display(), e);
+                }
 
-    Ok(written)
+                image_processor::ProcessingOutput {
+                    width: output.width,
+                    height: output.height,
+                    output_path: Some(output_path),
+                    preview_base64: None,
+                    suffix: output.suffix,
+                }
+            })
+            .collect();
+
+        Ok::<_, String>(written)
+    }).await.map_err(|e| e.to_string())?;
+
+    result
 }
 
 #[tauri::command]
-fn preview_icon(
+async fn preview_icon(
     input_path: String,
     crop: Option<image_processor::CropArea>,
     padding: Option<u8>,
@@ -77,26 +89,33 @@ fn preview_icon(
     off_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
     on_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
 ) -> Result<Vec<image_processor::ProcessingOutput>, String> {
-    let input = Path::new(&input_path);
+    let input_path_owned = input_path.clone();
 
-    let mut config = image_processor::IconConfig {
-        padding: padding.unwrap_or(2),
-        is_toggle: is_toggle.unwrap_or(false),
-        ..Default::default()
-    };
-    if let Some(adj) = off_adjustments {
-        config.off_adjustments = adj;
-    }
-    if let Some(adj) = on_adjustments {
-        config.on_adjustments = adj;
-    }
+    let result = tokio::task::spawn_blocking(move || {
+        let input = Path::new(&input_path_owned);
 
-    image_processor::generate_icon_set(input, &config, crop.as_ref(), image_processor::REAPER_SCALES)
-        .map_err(|e| e.to_string())
+        let mut config = image_processor::IconConfig {
+            padding: padding.unwrap_or(2),
+            is_toggle: is_toggle.unwrap_or(false),
+            ..Default::default()
+        };
+        if let Some(adj) = off_adjustments {
+            config.off_adjustments = adj;
+        }
+        if let Some(adj) = on_adjustments {
+            config.on_adjustments = adj;
+        }
+
+        image_processor::generate_icon_set(
+            input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
+        ).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?;
+
+    result
 }
 
 #[tauri::command]
-fn install_icon_set(
+async fn install_icon_set(
     input_path: String,
     reaper_resource_path: String,
     target_name: String,
@@ -106,45 +125,55 @@ fn install_icon_set(
     off_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
     on_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
 ) -> Result<Vec<String>, String> {
-    let input = Path::new(&input_path);
-    let target = if target_name.is_empty() {
-        input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("icon")
-            .to_string()
-    } else {
-        target_name
-    };
+    let input_path_owned = input_path.clone();
+    let reaper_path_owned = reaper_resource_path.clone();
+    let target_owned = target_name.clone();
 
-    let mut config = image_processor::IconConfig {
-        padding: padding.unwrap_or(2),
-        is_toggle: is_toggle.unwrap_or(false),
-        ..Default::default()
-    };
-    if let Some(adj) = off_adjustments {
-        config.off_adjustments = adj;
-    }
-    if let Some(adj) = on_adjustments {
-        config.on_adjustments = adj;
-    }
+    let result = tokio::task::spawn_blocking(move || {
+        let input = Path::new(&input_path_owned);
 
-    let results =
-        image_processor::generate_icon_set_raw(input, &config, crop.as_ref(), image_processor::REAPER_SCALES)
-            .map_err(|e| e.to_string())?;
+        let target = if target_owned.is_empty() {
+            input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("icon")
+                .to_string()
+        } else {
+            target_owned
+        };
 
-    installer::install_icon_set_raw(
-        &results,
-        Path::new(&reaper_resource_path),
-        &target,
-        image_processor::REAPER_SCALES,
-    )
-    .map(|paths| {
-        paths
-            .into_iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect()
-    })
+        let mut config = image_processor::IconConfig {
+            padding: padding.unwrap_or(2),
+            is_toggle: is_toggle.unwrap_or(false),
+            ..Default::default()
+        };
+        if let Some(adj) = off_adjustments {
+            config.off_adjustments = adj;
+        }
+        if let Some(adj) = on_adjustments {
+            config.on_adjustments = adj;
+        }
+
+        let results = image_processor::generate_icon_set_raw(
+            input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
+        ).map_err(|e| e.to_string())?;
+
+        installer::install_icon_set_raw(
+            &results,
+            Path::new(&reaper_path_owned),
+            &target,
+            image_processor::REAPER_SCALES,
+        )
+        .map(|paths| {
+            paths
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?;
+
+    result
 }
 
 #[tauri::command]
@@ -197,6 +226,7 @@ fn write_file(path: String, data: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use image::RgbaImage;
+    use tokio;
 
     /// Helper: create a small test PNG at `path` and return it.
     fn create_test_png(path: &std::path::Path) {
@@ -209,8 +239,8 @@ mod tests {
     // Returns Vec<ProcessingOutput> — one per scale
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn process_icon_with_padding_and_crop_returns_multi_scale() {
+    #[tokio::test]
+    async fn process_icon_with_padding_and_crop_returns_multi_scale() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_pad");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -234,6 +264,7 @@ mod tests {
             None,         // no off_adjustments
             None,         // no on_adjustments
         )
+        .await
         .expect("process_icon should succeed");
 
         // Should produce 3 outputs (one per scale)
@@ -248,23 +279,23 @@ mod tests {
             );
         }
 
-        // 30px scale: 6 × 30 = 180
-        assert_eq!(results[0].width, 180, "30px scale width");
+        // 30px scale: 3 × 30 = 90
+        assert_eq!(results[0].width, 90, "30px scale width");
         assert_eq!(results[0].height, 30, "30px scale height");
 
-        // 45px scale: 6 × 45 = 270
-        assert_eq!(results[1].width, 270, "45px scale width");
+        // 45px scale: 3 × 45 = 135
+        assert_eq!(results[1].width, 135, "45px scale width");
         assert_eq!(results[1].height, 45, "45px scale height");
 
-        // 60px scale: 6 × 60 = 360
-        assert_eq!(results[2].width, 360, "60px scale width");
+        // 60px scale: 3 × 60 = 180
+        assert_eq!(results[2].width, 180, "60px scale width");
         assert_eq!(results[2].height, 60, "60px scale height");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn process_icon_toggle_produces_twice_as_many() {
+    #[tokio::test]
+    async fn process_icon_toggle_produces_twice_as_many() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_toggle");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -284,6 +315,7 @@ mod tests {
             None,         // no off_adjustments
             None,         // no on_adjustments
         )
+        .await
         .expect("process_icon toggle should succeed");
 
         // 3 scales × 2 variants = 6 outputs
@@ -318,8 +350,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn process_icon_defaults_padding_to_2() {
+    #[tokio::test]
+    async fn process_icon_defaults_padding_to_2() {
         // Verify that calling without padding defaults to 2 (like the old behavior
         // called through generate_icon_set with padding=2)
         let tmp = std::env::temp_dir().join("grove_test_ipc_default_pad");
@@ -341,6 +373,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .expect("process_icon defaults should succeed");
 
         assert_eq!(results.len(), 3, "Should produce 3 scale outputs");
@@ -351,8 +384,8 @@ mod tests {
     // T7: preview_icon returns all 3 scales as base64
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn preview_icon_returns_multi_scale_base64() {
+    #[tokio::test]
+    async fn preview_icon_returns_multi_scale_base64() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_preview_ms");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -367,6 +400,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .expect("preview_icon should succeed");
 
         // Should return 3 outputs (one per scale)
@@ -386,8 +420,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn preview_icon_with_toggle_returns_six_outputs() {
+    #[tokio::test]
+    async fn preview_icon_with_toggle_returns_six_outputs() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_preview_toggle");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -402,6 +436,7 @@ mod tests {
             None,        // no off_adjustments
             None,        // no on_adjustments
         )
+        .await
         .expect("preview_icon toggle should succeed");
 
         assert_eq!(results.len(), 6, "Toggle preview should return 6 outputs");
@@ -413,8 +448,8 @@ mod tests {
     // T7: install_icon_set IPC wrapper
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn install_icon_set_command_creates_three_directories() {
+    #[tokio::test]
+    async fn install_icon_set_command_creates_three_directories() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_install_set");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -433,6 +468,7 @@ mod tests {
             None,          // no off_adjustments
             None,          // no on_adjustments
         )
+        .await
         .expect("install_icon_set should succeed");
 
         // Should install 3 files (one per scale, non-toggle)
@@ -454,8 +490,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn install_icon_set_command_toggle_creates_six_files() {
+    #[tokio::test]
+    async fn install_icon_set_command_toggle_creates_six_files() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_install_toggle");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -474,6 +510,7 @@ mod tests {
             None,         // no off_adjustments
             None,         // no on_adjustments
         )
+        .await
         .expect("install_icon_set toggle should succeed");
 
         // 3 scales × 2 variants = 6 files
@@ -594,8 +631,8 @@ mod tests {
     // RED phase — these tests reference params that DON'T exist yet
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn process_icon_accepts_optional_hsb_adjustments() {
+    #[tokio::test]
+    async fn process_icon_accepts_optional_hsb_adjustments() {
         // Passing None for both HSB params should maintain backward compat
         let tmp = std::env::temp_dir().join("grove_test_hsb_process");
         std::fs::create_dir_all(&tmp).unwrap();
@@ -615,6 +652,7 @@ mod tests {
             None,    // no off_adjustments
             None,    // no on_adjustments
         )
+        .await
         .expect("process_icon with None HSB should succeed");
 
         // Must produce 3 outputs (one per scale, non-toggle)
@@ -626,8 +664,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn process_icon_with_hsb_adjustments_produces_different_output() {
+    #[tokio::test]
+    async fn process_icon_with_hsb_adjustments_produces_different_output() {
         // Passing identity adjustments should produce same output count
         let tmp = std::env::temp_dir().join("grove_test_hsb_process_adj");
         std::fs::create_dir_all(&tmp).unwrap();
@@ -652,6 +690,7 @@ mod tests {
             Some(adjustments),
             Some(adjustments),
         )
+        .await
         .expect("process_icon with identity HSB should succeed");
 
         assert_eq!(results.len(), 3, "Should produce 3 scale outputs");
@@ -659,8 +698,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn preview_icon_accepts_optional_hsb_adjustments() {
+    #[tokio::test]
+    async fn preview_icon_accepts_optional_hsb_adjustments() {
         let tmp = std::env::temp_dir().join("grove_test_hsb_preview");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -675,6 +714,7 @@ mod tests {
             None,    // no off_adjustments
             None,    // no on_adjustments
         )
+        .await
         .expect("preview_icon with None HSB should succeed");
 
         assert_eq!(results.len(), 3, "Should return 3 scale outputs");
@@ -682,8 +722,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn install_icon_set_accepts_optional_hsb_adjustments() {
+    #[tokio::test]
+    async fn install_icon_set_accepts_optional_hsb_adjustments() {
         let tmp = std::env::temp_dir().join("grove_test_hsb_install");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -702,6 +742,7 @@ mod tests {
             None,    // no off_adjustments
             None,    // no on_adjustments
         )
+        .await
         .expect("install_icon_set with None HSB should succeed");
 
         assert_eq!(result.len(), 3, "Should install 3 files");
@@ -709,8 +750,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn preview_icon_with_toggle_and_hsb_adjustments_returns_six() {
+    #[tokio::test]
+    async fn preview_icon_with_toggle_and_hsb_adjustments_returns_six() {
         let tmp = std::env::temp_dir().join("grove_test_hsb_preview_toggle");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -730,9 +771,83 @@ mod tests {
             Some(adjustments),
             Some(adjustments),
         )
+        .await
         .expect("preview_icon with toggle + HSB should succeed");
 
         assert_eq!(results.len(), 6, "Toggle should return 6 outputs");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 1.3: Async command tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn async_preview_icon_returns_multi_scale_base64() {
+        let tmp = std::env::temp_dir().join("grove_test_async_preview");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let input_path = tmp.join("input.png");
+        let img = RgbaImage::from_pixel(64, 64, image::Rgba([100, 150, 200, 255]));
+        img.save(&input_path).expect("Failed to create test PNG");
+
+        let results = preview_icon(
+            input_path.to_string_lossy().to_string(),
+            None, None, None, None, None,
+        ).await.expect("async preview_icon should succeed");
+
+        assert_eq!(results.len(), 3, "Should return 3 scale outputs");
+        for out in &results {
+            assert!(out.preview_base64.is_some(), "Preview should have base64");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn async_process_icon_returns_multi_scale_outputs() {
+        let tmp = std::env::temp_dir().join("grove_test_async_process");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let input_path = tmp.join("input.png");
+        let output_dir = tmp.join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        let img = RgbaImage::from_pixel(64, 64, image::Rgba([100, 150, 200, 255]));
+        img.save(&input_path).expect("Failed to create test PNG");
+
+        let results = process_icon(
+            input_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            None, None, None, None, None,
+        ).await.expect("async process_icon should succeed");
+
+        assert_eq!(results.len(), 3, "Should produce 3 scale outputs");
+        for out in &results {
+            assert!(out.output_path.is_some(), "File mode should have path");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn async_install_icon_set_creates_files() {
+        let tmp = std::env::temp_dir().join("grove_test_async_install");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let input_path = tmp.join("input.png");
+        let img = RgbaImage::from_pixel(64, 64, image::Rgba([100, 150, 200, 255]));
+        img.save(&input_path).expect("Failed to create test PNG");
+
+        let result = install_icon_set(
+            input_path.to_string_lossy().to_string(),
+            tmp.to_string_lossy().to_string(),
+            "test_async".to_string(),
+            None, None, None, None, None,
+        ).await.expect("async install_icon_set should succeed");
+
+        assert_eq!(result.len(), 3, "Should install 3 files");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
