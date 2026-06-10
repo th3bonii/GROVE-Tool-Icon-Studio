@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import StatePreview from '../StatePreview';
+import StatePreview, { getCornerRadius } from '../StatePreview';
 import type { ProcessingOutput } from '../api';
 
 function makePreviewOutput(
@@ -75,6 +75,33 @@ describe('StatePreview', () => {
     expect(screen.getByText(/30×30 each/i)).toBeInTheDocument();
     expect(screen.getByText(/45×45 each/i)).toBeInTheDocument();
   });
+
+describe('getCornerRadius', () => {
+  it('matches Rust expected output for 30px with padding 4', () => {
+    // Rust: floor(30*0.15+0.5)=5, min(5,4)=4
+    expect(getCornerRadius(30, 4)).toBe(4);
+  });
+
+  it('matches Rust expected output for 30px with no padding', () => {
+    // Rust: floor(30*0.15+0.5)=5, no clamp = 5
+    expect(getCornerRadius(30, 0)).toBe(5);
+  });
+
+  it('matches Rust expected output for 45px with padding 4', () => {
+    // Rust: floor(45*0.15+0.5)=7, min(7,4)=4
+    expect(getCornerRadius(45, 4)).toBe(4);
+  });
+
+  it('matches Rust expected output for 60px with padding 4', () => {
+    // Rust: floor(60*0.15+0.5)=9, min(9,4)=4
+    expect(getCornerRadius(60, 4)).toBe(4);
+  });
+
+  it('trivially small scale still produces minimum radius 2', () => {
+    // Rust: floor(1*0.15+0.5)=0, max(0,2)=2
+    expect(getCornerRadius(1, 0)).toBe(2);
+  });
+});
 
   it('renders multiple scales in sorted order', () => {
     const results: ProcessingOutput[] = [

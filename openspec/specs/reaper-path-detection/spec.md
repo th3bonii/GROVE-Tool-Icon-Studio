@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Detection of REAPER installation directories, including hybrid Wine/Proton setups on Linux.
+Detection of REAPER installation directories, including hybrid Wine/Proton setups on Linux and WSL (Windows Subsystem for Linux) detection.
 
 ## Requirements
 
@@ -25,6 +25,18 @@ The system MUST detect REAPER installations running under Wine or Proton on Linu
 - GIVEN the OS is Linux and REAPER is installed via Wine or Proton
 - WHEN the path detection routine runs
 - THEN it MUST return the translated path to the Wine/Proton prefix
+
+### Requirement: WSL Detection (Added)
+
+The system MUST detect REAPER installations running under WSL on Linux by checking `/proc/version` for a "Microsoft" or "WSL" marker, then scanning `/mnt/c/Users/` for Windows-native REAPER resource dirs.
+
+#### Scenario: WSL installation on Linux
+
+- GIVEN the OS is Linux and the kernel reports "microsoft" or "wsl" in `/proc/version`
+- WHEN the path detection routine runs after native path fails
+- THEN it MUST scan `/mnt/c/Users/<username>/AppData/Roaming/REAPER`
+- AND if found, return that path with method `Wsl`
+- AND if the current user's path is absent, it MUST fall back to scanning all user directories under `/mnt/c/Users/`
 
 ### Requirement: Manual Fallback
 

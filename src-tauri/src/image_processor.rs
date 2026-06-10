@@ -1,6 +1,5 @@
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
 use std::path::Path;
-use std::sync::Mutex;
 
 /// Number of icon states in a REAPER toolbar strip (Normal/Hover/Active).
 const REAPER_STATES: u32 = 3;
@@ -11,6 +10,10 @@ pub const REAPER_SCALES: &[u32] = &[30, 45, 60];
 /// Subdirectory names for each REAPER scale.
 /// "Data/toolbar_icons" for 100%, "Data/toolbar_icons/150" for 150%, etc.
 pub const REAPER_SCALE_DIRS: &[&str] = &["Data/toolbar_icons", "Data/toolbar_icons/150", "Data/toolbar_icons/200"];
+
+/// Corner radius factor for rounded-rect mask.
+/// Applied as `floor(scale * CORNER_RADIUS_FACTOR + 0.5)` with a minimum of 2.
+pub const CORNER_RADIUS_FACTOR: f64 = 0.15;
 
 /// Errors that can occur during icon processing.
 #[derive(Debug, thiserror::Error)]
@@ -45,7 +48,7 @@ impl Default for HsbAdjustment {
 ///
 /// Keeps old fields (`hover_brightness`, `click_brightness`) for backward
 /// compatibility with `generate_three_state`. Adds new HSB-based adjustment
-/// arrays for the REAPER-standard 6-state pipeline (`generate_icon_set`).
+/// arrays for the REAPER-standard 3-state pipeline (`generate_icon_set`).
 #[derive(Debug, Clone)]
 pub struct IconConfig {
     /// Brightness adjustment for the hover state (additive, 0–255 range offset).
@@ -67,9 +70,17 @@ impl Default for IconConfig {
         Self {
             hover_brightness: 30,
             click_brightness: -40,
-            off_adjustments: [HsbAdjustment::default(); 3],
-            on_adjustments: [HsbAdjustment::default(); 3],
-            padding: 2,
+            off_adjustments: [
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 },   // Normal
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 30.0 },  // Hover
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -40.0 }, // Active
+            ],
+            on_adjustments: [
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 },   // Normal
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 30.0 },  // Hover
+                HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -40.0 }, // Active
+            ],
+            padding: 4,
             is_toggle: false,
         }
     }
@@ -82,92 +93,6 @@ pub struct CropArea {
     pub y: u32,
     pub width: u32,
     pub height: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Source Image Cache (Task 1.1)
-// ---------------------------------------------------------------------------
-
-/// Cached decoded source image, keyed by source path + crop area hash.
-struct CachedSource {
-    path: String,
-    crop_hash: u64,
-    image: DynamicImage,
-}
-
-/// Module-level cache for the decoded source image.
-/// Populated on first load; invalidated on new path or crop change.
-static SOURCE_CACHE: Mutex<Option<CachedSource>> = Mutex::new(None);
-
-/// Compute a simple hash from a `CropArea`'s four fields.
-fn hash_crop(crop: &CropArea) -> u64 {
-    let mut h: u64 = 0;
-    h = h.wrapping_mul(31).wrapping_add(crop.x as u64);
-    h = h.wrapping_mul(31).wrapping_add(crop.y as u64);
-    h = h.wrapping_mul(31).wrapping_add(crop.width as u64);
-    h = h.wrapping_mul(31).wrapping_add(crop.height as u64);
-    h
-}
-
-/// Load a source image from cache or disk.
-///
-/// If the cache contains an entry matching `path` and `crop`, returns the
-/// cached center-cropped square directly (no disk I/O). Otherwise, opens
-/// the file from disk, optionally applies the crop region, center-crops to
-/// a square, caches the result, and returns it.
-///
-/// When `crop` is `None`, the full image is used (center-cropped to square
-/// without a prior crop-region extraction). The cache key still uses a
-/// distinctive hash so that `Some(crop)` and `None` are treated separately.
-fn load_source_cached(path: &str, crop: Option<&CropArea>) -> Result<DynamicImage, Box<dyn std::error::Error>> {
-    let crop_hash = crop.map(hash_crop).unwrap_or(0u64);
-
-    // Check cache without holding the lock across I/O.
-    // If poisoned, treat as cache miss and let the poison recovery handle it.
-    {
-        let cache = match SOURCE_CACHE.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(), // recover — data is still valid
-        };
-        if let Some(ref cached) = *cache {
-            if cached.path == path && cached.crop_hash == crop_hash {
-                return Ok(cached.image.clone());
-            }
-        }
-    } // Lock released here
-
-    // Cache miss — read from disk (no lock held during I/O)
-    let img = image::open(path)?;
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        return Err(format!("Source image has zero dimension: {}x{}", w, h).into());
-    }
-
-    let img_rgba = img.to_rgba8();
-
-    // Apply crop region (if provided) then center-crop to square
-    let working = match crop {
-        Some(area) => crop_region(&img_rgba, area),
-        None => img_rgba,
-    };
-    let square = center_crop_square(&working);
-
-    let result = DynamicImage::ImageRgba8(square);
-
-    // Update cache (re-acquire lock)
-    {
-        let mut cache = match SOURCE_CACHE.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *cache = Some(CachedSource {
-            path: path.to_string(),
-            crop_hash,
-            image: result.clone(),
-        });
-    }
-
-    Ok(result)
 }
 
 /// Result of processing an icon — used for both file-save and preview modes.
@@ -226,7 +151,7 @@ pub struct OutputInfo {
 /// Alpha channel is strictly preserved across all three states.
 ///
 /// ⚠️ **DEPRECATED**: Use `generate_icon_set()` instead for new code.
-/// `generate_icon_set` supports the full REAPER-standard 6-state pipeline
+/// `generate_icon_set` supports the full REAPER-standard 3-state pipeline
 /// with HSB adjustments, padding, multi-scale, and toggle ON/OFF generation.
 /// This function is kept for backward compatibility but will be removed
 /// in a future release.
@@ -278,7 +203,7 @@ pub fn generate_three_state(
     copy_region(&clicked, &mut output, sw * 2);
 
     // Step 5: Apply rounded-corner mask to each state for a polished REAPER look
-    let corner_radius = (((state_size as f32) * 0.15) + 0.5).floor().max(2.0) as u32;
+    let corner_radius = icon_corner_radius(state_size, config.padding);
     apply_rounded_rect_mask(&mut output, state_size, state_size, corner_radius);
 
     // Step 6: Save to file or encode as base64
@@ -475,6 +400,40 @@ pub fn apply_padding(img: &RgbaImage, canvas_size: u32, padding: u8) -> RgbaImag
     output
 }
 
+/// Compute the corner radius for an icon state given its scale and padding.
+///
+/// The base radius is `floor(scale * CORNER_RADIUS_FACTOR + 0.5)`, clamped to
+/// a minimum of 2. If `padding > 0`, the result is additionally clamped to
+/// `padding` so that the corner radius never exceeds the padding inset.
+pub fn icon_corner_radius(scale: u32, padding: u8) -> u32 {
+    let radius = (((scale as f32) * (CORNER_RADIUS_FACTOR as f32) + 0.5).floor().max(2.0)) as u32;
+    radius.min(if padding > 0 { padding as u32 } else { u32::MAX })
+}
+
+/// Load a source image from disk, optionally crop it, and center-crop to square.
+///
+/// This replaces the previous `load_source_cached` which had a single-entry
+/// `SOURCE_CACHE` that never hit in batch mode. Files are small (32×32px),
+/// so disk I/O is negligible.
+fn load_source(path: &str, crop: Option<&CropArea>) -> Result<DynamicImage, Box<dyn std::error::Error>> {
+    let img = image::open(path)?;
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return Err(format!("Source image has zero dimension: {}x{}", w, h).into());
+    }
+
+    let img_rgba = img.to_rgba8();
+
+    // Apply crop region (if provided) then center-crop to square
+    let working = match crop {
+        Some(area) => crop_region(&img_rgba, area),
+        None => img_rgba,
+    };
+    let square = center_crop_square(&working);
+
+    Ok(DynamicImage::ImageRgba8(square))
+}
+
 // ---------------------------------------------------------------------------
 // Multi-Scale Generation
 // ---------------------------------------------------------------------------
@@ -489,6 +448,7 @@ pub fn apply_padding(img: &RgbaImage, canvas_size: u32, padding: u8) -> RgbaImag
 fn process_padded_to_bytes(
     padded: &RgbaImage,
     scale_size: u32,
+    padding: u8,
     adjustments: &[&HsbAdjustment; 3],
 ) -> Result<(u32, u32, Vec<u8>), ProcessingError> {
     let (sw, sh) = padded.dimensions();
@@ -502,8 +462,9 @@ fn process_padded_to_bytes(
         copy_region(&state_img, &mut output, x_off);
     }
 
-    // Apply rounded-corner mask
-    let corner_radius = (((scale_size as f32) * 0.15) + 0.5).floor().max(2.0) as u32;
+    // Apply rounded-corner mask — radius computed by shared function
+    // clamped to padding so content corners are never clipped.
+    let corner_radius = icon_corner_radius(scale_size, padding);
     apply_rounded_rect_mask(&mut output, scale_size, scale_size, corner_radius);
 
     // Encode to PNG bytes
@@ -553,8 +514,7 @@ pub fn generate_icon_set(
     crop: Option<&CropArea>,
     scales: &[u32],
 ) -> Result<Vec<ProcessingOutput>, ProcessingError> {
-    // Use cached source to avoid re-reading from disk
-    let source = load_source_cached(
+    let source = load_source(
         input.to_str().ok_or_else(|| ProcessingError::OpenError(
             "Invalid path".to_string()
         ))?,
@@ -579,7 +539,7 @@ pub fn generate_icon_set(
         for &(use_on, suffix) in variants {
             let adjustments = build_adjustments(config, use_on);
             let (width, height, bytes) =
-                process_padded_to_bytes(&padded, scale_size, &adjustments)?;
+                process_padded_to_bytes(&padded, scale_size, config.padding, &adjustments)?;
 
             let encoded = base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
@@ -614,8 +574,7 @@ pub fn generate_icon_set_raw(
     crop: Option<&CropArea>,
     scales: &[u32],
 ) -> Result<Vec<ProcessingOutputRaw>, ProcessingError> {
-    // Use cached source to avoid re-reading from disk
-    let source = load_source_cached(
+    let source = load_source(
         input.to_str().ok_or_else(|| ProcessingError::OpenError(
             "Invalid path".to_string()
         ))?,
@@ -640,7 +599,7 @@ pub fn generate_icon_set_raw(
         for &(use_on, suffix) in variants {
             let adjustments = build_adjustments(config, use_on);
             let (width, height, data) =
-                process_padded_to_bytes(&padded, scale_size, &adjustments)?;
+                process_padded_to_bytes(&padded, scale_size, config.padding, &adjustments)?;
 
             results.push(ProcessingOutputRaw {
                 width,
@@ -764,122 +723,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // Task 1.1: Source Cache — RED tests (struct/fn does NOT exist yet)
-    // -----------------------------------------------------------------------
-
-    /// Clear the global SOURCE_CACHE so a test starts with a clean slate.
-    fn clear_cache() {
-        *SOURCE_CACHE.lock().unwrap() = None;
-    }
-
-    #[test]
-    fn cached_source_struct_has_required_fields() {
-        clear_cache();
-        let img = RgbaImage::new(4, 4);
-        let cached = CachedSource {
-            path: String::from("/tmp/test.png"),
-            crop_hash: 42u64,
-            image: DynamicImage::ImageRgba8(img),
-        };
-        assert_eq!(cached.path, "/tmp/test.png", "path field");
-        assert_eq!(cached.crop_hash, 42, "crop_hash field");
-        let (w, h) = cached.image.dimensions();
-        assert_eq!((w, h), (4, 4), "image dimensions");
-    }
-
-    #[test]
-    fn source_cache_static_exists_as_mutex_option() {
-        clear_cache();
-        // Just verify the static compiles and the lock is accessible
-        let guard = SOURCE_CACHE.lock().unwrap();
-        drop(guard);
-    }
-
-    #[test]
-    fn hash_crop_produces_different_hash_for_different_crops() {
-        clear_cache();
-        let crop_a = CropArea { x: 0, y: 0, width: 10, height: 10 };
-        let crop_b = CropArea { x: 5, y: 5, width: 10, height: 10 };
-        let hash_a = hash_crop(&crop_a);
-        let hash_b = hash_crop(&crop_b);
-        assert_ne!(hash_a, hash_b,
-            "Different crops should produce different hashes");
-    }
-
-    #[test]
-    fn load_source_cached_returns_same_as_direct() {
-        clear_cache();
-        // Verify cached load produces same image as direct open+center-crop
-        let tmp_dir = std::env::temp_dir().join("grove_test_cache_return");
-        std::fs::create_dir_all(&tmp_dir).unwrap();
-
-        let input_path = tmp_dir.join("input.png");
-        let img = make_test_image(32, 32);
-        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
-
-        let crop = CropArea { x: 2, y: 2, width: 20, height: 20 };
-
-        // Direct: open → crop_region → center_crop_square
-        let src = image::open(&input_path).unwrap().to_rgba8();
-        let cropped = crop_region(&src, &crop);
-        let expected = center_crop_square(&cropped);
-
-        // Cached
-        let result = load_source_cached(
-            input_path.to_str().unwrap(), Some(&crop),
-        ).expect("load_source_cached should succeed");
-
-        assert_eq!(result.dimensions(), expected.dimensions(),
-            "Cached result should have same dimensions");
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
-
-    #[test]
-    fn source_cache_hit_avoids_disk_read() {
-        clear_cache();
-        // After first load, delete the file. Cache hit on same path+crop
-        // should still succeed (result from cache, no disk read).
-        // Cache miss (different crop) should fail (file deleted).
-        let tmp_dir = std::env::temp_dir().join("grove_test_cache_hit");
-        std::fs::create_dir_all(&tmp_dir).unwrap();
-
-        let input_path = tmp_dir.join("input.png");
-        let img = make_test_image(32, 32);
-        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
-
-        let crop = CropArea { x: 0, y: 0, width: 16, height: 16 };
-        let path_str = input_path.to_str().unwrap().to_string();
-
-        // First load — populates cache, reads from disk
-        let first = load_source_cached(&path_str, Some(&crop));
-        assert!(first.is_ok(), "First load should succeed");
-
-        // Delete the file from disk
-        std::fs::remove_file(&input_path).unwrap();
-
-        // Second load with same path+crop — cache hit (no disk read)
-        let second = load_source_cached(&path_str, Some(&crop));
-        assert!(second.is_ok(), "Cache hit should succeed even after file deleted");
-
-        // Different crop — cache miss (needs to read from disk, file deleted)
-        let diff_crop = CropArea { x: 5, y: 5, width: 10, height: 10 };
-        let third = load_source_cached(&path_str, Some(&diff_crop));
-        assert!(third.is_err(), "Cache miss should fail when file is absent");
-
-        // Reset cache for other tests
-        clear_cache();
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
-
-    // -----------------------------------------------------------------------
     // Task 1.2: Pre-resize — approval test (RED: captures current output)
     // -----------------------------------------------------------------------
 
     #[test]
     fn pre_resize_produces_identical_output_to_current() {
-        clear_cache();
         // This approval test documents current output behavior.
         // After restructuring loops, the output MUST remain identical.
         let tmp_dir = std::env::temp_dir().join("grove_test_preresize");
@@ -890,7 +738,7 @@ mod tests {
         DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
 
         let config = IconConfig {
-            padding: 2,
+            padding: 4,
             off_adjustments: [
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 10.0 },
@@ -935,104 +783,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 
-    // -----------------------------------------------------------------------
-    // Task 1.1 Triangulation: edge cases for cache
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn load_source_cached_no_crop_uses_full_image() {
-        clear_cache();
-        let tmp_dir = std::env::temp_dir().join("grove_test_cache_no_crop");
-        std::fs::create_dir_all(&tmp_dir).unwrap();
-
-        let input_path = tmp_dir.join("input.png");
-        let img = make_test_image(40, 30); // non-square
-        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
-
-        // With no crop, should center-crop the full image
-        let result = load_source_cached(
-            input_path.to_str().unwrap(), None,
-        ).expect("load with no crop should succeed");
-
-        let (w, h) = result.dimensions();
-        // Center-crop of 40×30 → 30×30 square
-        assert_eq!(w, 30, "Should be 30 wide (min of 40,30)");
-        assert_eq!(h, 30, "Should be 30 tall (min of 40,30)");
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
-
-    #[test]
-    fn load_source_cached_cache_invalidates_on_path_change() {
-        clear_cache();
-        let tmp_dir = std::env::temp_dir().join("grove_test_cache_path_change");
-        std::fs::create_dir_all(&tmp_dir).unwrap();
-
-        let input_a = tmp_dir.join("a.png");
-        let input_b = tmp_dir.join("b.png");
-        let mut img_a = RgbaImage::new(16, 16);
-        img_a.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
-        DynamicImage::ImageRgba8(img_a).save(&input_a).unwrap();
-
-        let mut img_b = RgbaImage::new(16, 16);
-        img_b.put_pixel(0, 0, Rgba([0, 255, 0, 255]));
-        DynamicImage::ImageRgba8(img_b).save(&input_b).unwrap();
-
-        let crop = CropArea { x: 0, y: 0, width: 16, height: 16 };
-
-        // Load file A
-        load_source_cached(input_a.to_str().unwrap(), Some(&crop))
-            .expect("load A should succeed");
-
-        // Load file B — different path, should not return A's cached image
-        load_source_cached(input_b.to_str().unwrap(), Some(&crop))
-            .expect("load B should succeed");
-
-        // Delete file A
-        std::fs::remove_file(&input_a).unwrap();
-
-        // Load A again — cache miss (path changed) — should fail (file deleted)
-        let res_a_again = load_source_cached(input_a.to_str().unwrap(), Some(&crop));
-        assert!(res_a_again.is_err(),
-            "Re-loading A after cache invalidated by B should fail (file gone)");
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
-
-    #[test]
-    fn generate_icon_set_uses_cache_and_produces_correct_output() {
-        clear_cache();
-        // Verify generate_icon_set works via cache layer
-        let tmp_dir = std::env::temp_dir().join("grove_test_cache_gen");
-        std::fs::create_dir_all(&tmp_dir).unwrap();
-
-        let input_path = tmp_dir.join("input.png");
-        let img = make_test_image(32, 32);
-        DynamicImage::ImageRgba8(img).save(&input_path).unwrap();
-
-        let config = IconConfig {
-            padding: 0,
-            off_adjustments: [HsbAdjustment::default(); 3],
-            on_adjustments: [HsbAdjustment::default(); 3],
-            ..Default::default()
-        };
-
-        let results = generate_icon_set(
-            &input_path, &config, None, &[30u32],
-        ).expect("generate_icon_set via cache should succeed");
-
-        assert_eq!(results.len(), 1, "Should produce 1 output");
-        assert_eq!(results[0].width, 90, "3 × 30 = 90");
-
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
-
     #[test]
     fn reaper_scales_constants_have_correct_values() {
         assert_eq!(REAPER_SCALES, &[30u32, 45, 60]);
         assert_eq!(REAPER_SCALE_DIRS, &["Data/toolbar_icons", "Data/toolbar_icons/150", "Data/toolbar_icons/200"]);
         assert_eq!(REAPER_SCALES.len(), REAPER_SCALE_DIRS.len(),
             "Scales and dirs should have same length");
+    }
+
+    #[test]
+    fn corner_radius_factor_has_correct_value() {
+        assert!((CORNER_RADIUS_FACTOR - 0.15).abs() < f64::EPSILON,
+            "CORNER_RADIUS_FACTOR should be 0.15, got {}", CORNER_RADIUS_FACTOR);
+    }
+
+    #[test]
+    fn icon_corner_radius_computes_correctly() {
+        // scale=30, padding=4 → radius = floor(30*0.15+0.5)=5, min(5,4) = 4
+        assert_eq!(icon_corner_radius(30, 4), 4, "30px with padding 4 should clamp to 4");
+        // scale=30, padding=0 → radius = floor(30*0.15+0.5)=5, no clamp = 5
+        assert_eq!(icon_corner_radius(30, 0), 5, "30px with no padding should be 5");
+        // scale=45, padding=4 → radius = floor(45*0.15+0.5)=7, min(7,4) = 4
+        assert_eq!(icon_corner_radius(45, 4), 4, "45px with padding 4 should clamp to 4");
+        // scale=60, padding=4 → radius = floor(60*0.15+0.5)=9, min(9,4) = 4
+        assert_eq!(icon_corner_radius(60, 4), 4, "60px with padding 4 should clamp to 4");
     }
 
     fn make_test_image(w: u32, h: u32) -> RgbaImage {
@@ -1079,7 +853,7 @@ mod tests {
             click_brightness: -40,
             off_adjustments: [HsbAdjustment::default(); 3],
             on_adjustments: [HsbAdjustment::default(); 3],
-            padding: 2,
+            padding: 4,
             is_toggle: false,
         };
 
@@ -1128,7 +902,7 @@ mod tests {
             click_brightness: -40,
             off_adjustments: [HsbAdjustment::default(); 3],
             on_adjustments: [HsbAdjustment::default(); 3],
-            padding: 2,
+            padding: 4,
             is_toggle: false,
         };
 
@@ -1464,7 +1238,7 @@ mod tests {
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 15.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -20.0 },
             ],
-            padding: 2,
+            padding: 4,
             is_toggle: false,
         };
 
@@ -1513,7 +1287,7 @@ mod tests {
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 15.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -20.0 },
             ],
-            padding: 2,
+            padding: 4,
             is_toggle: false,
         };
 
@@ -1567,7 +1341,7 @@ mod tests {
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 15.0 },
                 HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: -20.0 },
             ],
-            padding: 2,
+            padding: 4,
             is_toggle: false,
         };
 
@@ -2323,7 +2097,7 @@ mod tests {
                 HsbAdjustment { hue_shift: 180.0, sat_delta: 0.0, bri_delta: 10.0 },
                 HsbAdjustment { hue_shift: 180.0, sat_delta: 0.0, bri_delta: -10.0 },
             ],
-            padding: 2,
+            padding: 4,
             is_toggle: true,
         };
 

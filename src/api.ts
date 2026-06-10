@@ -1,36 +1,11 @@
-import { invoke } from '@tauri-apps/api/core';
+import { z } from 'zod';
+import { safeInvoke } from './validation';
+import { ProcessingOutputSchema, DetectionResultSchema } from './validation';
+import type { CropArea, HsbAdjustment, ProcessingOutput, DetectionResult } from './validation';
 
-/**
- * Result from the REAPER path detection engine.
- */
-export interface DetectionResult {
-  path: string | null;
-  method: 'Native' | 'Wine' | 'Proton' | 'Manual';
-}
-
-/**
- * Defines a rectangular region for cropping.
- * Matches the Rust `image_processor::CropArea` struct.
- */
-export interface CropArea {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/**
- * HSB (Hue-Saturation-Brightness) adjustment for a single icon state.
- * Matches the Rust `image_processor::HsbAdjustment` struct.
- */
-export interface HsbAdjustment {
-  /** Hue shift in degrees (REAPER spec locks this at 0°). */
-  hue_shift: number;
-  /** Additive saturation delta (percentage points, e.g. -0.20 = -20pp). */
-  sat_delta: number;
-  /** Additive brightness delta (percentage points, e.g. 15.0 = +15pp). */
-  bri_delta: number;
-}
+// Re-export types and errors for consumers
+export type { CropArea, HsbAdjustment, ProcessingOutput, DetectionResult };
+export { IPCValidationError } from './validation';
 
 /**
  * Configuration for multi-scale icon generation.
@@ -47,18 +22,10 @@ export interface IconConfig {
   on_adjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
 }
 
-/**
- * Result from the icon processing pipeline.
- * Matches the Rust `image_processor::ProcessingOutput` struct.
- */
-export interface ProcessingOutput {
-  width: number;
-  height: number;
-  output_path: string | null;
-  preview_base64: string | null;
-  /** File suffix: "" for OFF variant, "_on" for ON variant. */
-  suffix: string;
-}
+/// Corner radius factor for rounded-rect mask.
+/// Applied as `Math.floor(scale * CORNER_RADIUS_FACTOR + 0.5)` with a minimum of 2.
+/// Must match `image_processor::CORNER_RADIUS_FACTOR` in Rust.
+export const CORNER_RADIUS_FACTOR = 0.15;
 
 // Re-export the original name for backward compatibility.
 // Deprecated: use ProcessingOutput instead.
@@ -70,7 +37,7 @@ export type ProcessingResult = ProcessingOutput;
  * Falls back to `Manual` method if no installation is found.
  */
 export async function detectReaperPath(): Promise<DetectionResult> {
-  return await invoke<DetectionResult>('detect_reaper_path');
+  return safeInvoke('detect_reaper_path', {}, DetectionResultSchema);
 }
 
 /**
@@ -80,7 +47,7 @@ export async function detectReaperPath(): Promise<DetectionResult> {
  * @param inputPath  Absolute path to the source PNG image.
  * @param outputDir  Absolute path to the directory where the output should be saved.
  * @param crop       Optional crop region to extract before processing.
- * @param padding    Optional padding inset in pixels (0–4, defaults to 2).
+ * @param padding    Optional padding inset in pixels (0–4, defaults to 4).
  * @param isToggle   Optional toggle mode (defaults to false).
  * @returns Array of ProcessingOutput, one per scale (+ ON variant when toggle enabled).
  */
@@ -93,7 +60,7 @@ export async function processIcon(
   offAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
   onAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
 ): Promise<ProcessingOutput[]> {
-  return await invoke<ProcessingOutput[]>('process_icon', {
+  return safeInvoke('process_icon', {
     inputPath,
     outputDir,
     crop: crop ?? null,
@@ -101,7 +68,7 @@ export async function processIcon(
     isToggle: isToggle ?? null,
     offAdjustments: offAdjustments ?? null,
     onAdjustments: onAdjustments ?? null,
-  });
+  }, ProcessingOutputSchema.array());
 }
 
 /**
@@ -110,7 +77,7 @@ export async function processIcon(
  *
  * @param inputPath  Absolute path to the source PNG image.
  * @param crop       Optional crop region to extract before processing.
- * @param padding    Optional padding inset in pixels (0–4, defaults to 2).
+ * @param padding    Optional padding inset in pixels (0–4, defaults to 4).
  * @param isToggle   Optional toggle mode (defaults to false).
  * @returns Array of ProcessingOutput with preview_base64 set, one per scale.
  */
@@ -122,14 +89,14 @@ export async function previewIcon(
   offAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
   onAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
 ): Promise<ProcessingOutput[]> {
-  return await invoke<ProcessingOutput[]>('preview_icon', {
+  return safeInvoke('preview_icon', {
     inputPath,
     crop: crop ?? null,
     padding: padding ?? null,
     isToggle: isToggle ?? null,
     offAdjustments: offAdjustments ?? null,
     onAdjustments: onAdjustments ?? null,
-  });
+  }, ProcessingOutputSchema.array());
 }
 
 /**
@@ -155,7 +122,7 @@ export async function installIconSet(
   offAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
   onAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
 ): Promise<string[]> {
-  return await invoke<string[]>('install_icon_set', {
+  return safeInvoke('install_icon_set', {
     inputPath,
     reaperResourcePath,
     targetName,
@@ -164,7 +131,7 @@ export async function installIconSet(
     isToggle: isToggle ?? null,
     offAdjustments: offAdjustments ?? null,
     onAdjustments: onAdjustments ?? null,
-  });
+  }, z.string().array());
 }
 
 /**
@@ -180,11 +147,11 @@ export async function installIcon(
   reaperResourcePath: string,
   targetName: string,
 ): Promise<string> {
-  return await invoke<string>('install_icon', {
+  return safeInvoke('install_icon', {
     sourcePath,
     reaperResourcePath,
     targetName,
-  });
+  }, z.string());
 }
 
 /**
@@ -197,9 +164,9 @@ export async function installIcon(
 export async function listInstalledIcons(
   reaperResourcePath: string,
 ): Promise<string[]> {
-  return await invoke<string[]>('list_installed_icons', {
+  return safeInvoke('list_installed_icons', {
     reaperResourcePath,
-  });
+  }, z.string().array());
 }
 
 /**
@@ -213,10 +180,10 @@ export async function deleteIcon(
   reaperResourcePath: string,
   iconName: string,
 ): Promise<void> {
-  return await invoke<void>('delete_icon', {
+  return safeInvoke('delete_icon', {
     reaperResourcePath,
     iconName,
-  });
+  }, z.void());
 }
 
 /**
@@ -231,10 +198,10 @@ export async function getIconStrip(
   reaperResourcePath: string,
   iconName: string,
 ): Promise<string> {
-  return await invoke<string>('get_icon_strip', {
+  return safeInvoke('get_icon_strip', {
     reaperResourcePath,
     iconName,
-  });
+  }, z.string());
 }
 
 /**
@@ -245,5 +212,5 @@ export async function getIconStrip(
  * @param data  Base64-encoded data to write.
  */
 export async function writeFile(path: string, data: string): Promise<void> {
-  return await invoke<void>('write_file', { path, data });
+  return safeInvoke('write_file', { path, data }, z.void());
 }

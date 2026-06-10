@@ -17,6 +17,8 @@ pub enum DetectionMethod {
     Wine,
     /// Found inside a Steam/Proton prefix.
     Proton,
+    /// Found via WSL mounting of a native Windows REAPER install.
+    Wsl,
     /// No automatic detection succeeded; user must pick manually.
     Manual,
 }
@@ -25,32 +27,68 @@ pub enum DetectionMethod {
 ///
 /// Strategy (ordered by priority):
 /// 1. Check standard native OS path.
-/// 2. (Linux only) Scan common Wine prefixes.
-/// 3. (Linux only) Scan Steam/Proton compatdata prefixes.
-/// 4. Return `Manual` so the UI can prompt for manual selection.
+/// 2. (WSL only) Scan /mnt/c/Users/ for native Windows REAPER.
+/// 3. (Linux only) Scan common Wine prefixes.
+/// 4. (Linux only) Scan Steam/Proton compatdata prefixes.
+/// 5. Return `Manual` so the UI can prompt for manual selection.
 pub fn detect() -> DetectionResult {
     // 1. Native path
     if let Some(native) = native_resource_path() {
         if native.is_dir() {
+            path_detector_log(format!(
+                "Native path found: {}",
+                native.display()
+            ));
             return DetectionResult {
                 path: Some(native),
                 method: DetectionMethod::Native,
             };
         }
+        path_detector_log(format!(
+            "Native path candidate exists but not a directory: {}",
+            native.display()
+        ));
+    } else {
+        path_detector_log("Native path: no candidate (unsupported OS)");
     }
 
-    // 2 & 3. Wine / Proton (Linux only)
+    // 2. WSL (Linux only — mounts native Windows drives at /mnt/<letter>/)
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(result) = detect_wsl() {
+            path_detector_log(format!(
+                "WSL path found: {}",
+                result.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+            ));
+            return result;
+        }
+        path_detector_log("WSL: no REAPER path found");
+    }
+
+    // 3 & 4. Wine / Proton (Linux only)
     #[cfg(target_os = "linux")]
     {
         if let Some(result) = detect_wine_prefix() {
+            path_detector_log(format!(
+                "Wine path found: {}",
+                result.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+            ));
             return result;
         }
+        path_detector_log("Wine: no REAPER path found in ~/.wine");
+
         if let Some(result) = detect_proton_prefix() {
+            path_detector_log(format!(
+                "Proton path found: {}",
+                result.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+            ));
             return result;
         }
+        path_detector_log("Proton: no REAPER path found in Steam compatdata");
     }
 
     // 4. Manual fallback
+    path_detector_log("Manual: no automatic detection method succeeded");
     DetectionResult {
         path: None,
         method: DetectionMethod::Manual,
@@ -86,6 +124,54 @@ fn native_resource_path() -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 // Wine / Proton helpers (Linux only)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// WSL detection (Linux only)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+fn detect_wsl() -> Option<DetectionResult> {
+    // Detect WSL by checking /proc/version for "Microsoft" or "WSL".
+    let contents = std::fs::read_to_string("/proc/version").ok()?;
+    let is_wsl = contents.to_ascii_lowercase().contains("microsoft")
+        || contents.to_ascii_lowercase().contains("wsl");
+    if !is_wsl {
+        return None;
+    }
+
+    // Strategy: try the current user first, then scan other users.
+    let home = dirs::home_dir()?;
+    let user = home.file_name()?.to_str()?;
+    let wsl_candidate = PathBuf::from(format!(
+        "/mnt/c/Users/{}/AppData/Roaming/REAPER",
+        user
+    ));
+
+    if wsl_candidate.is_dir() {
+        return Some(DetectionResult {
+            path: Some(wsl_candidate),
+            method: DetectionMethod::Wsl,
+        });
+    }
+
+    // Fallback: scan all user directories under /mnt/c/Users/
+    let users_dir = Path::new("/mnt/c/Users");
+    if users_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(users_dir) {
+            for entry in entries.flatten() {
+                let reaper_path = entry.path().join("AppData/Roaming/REAPER");
+                if reaper_path.is_dir() {
+                    return Some(DetectionResult {
+                        path: Some(reaper_path),
+                        method: DetectionMethod::Wsl,
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
 
 #[cfg(target_os = "linux")]
 fn reaper_subpath_in_prefix(prefix: &Path) -> PathBuf {
@@ -197,12 +283,45 @@ fn detect_proton_prefix() -> Option<DetectionResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Log helper
+// ---------------------------------------------------------------------------
+
+/// Emit a debug log line prefixed with `[path_detector]` for tracing resolution.
+pub(crate) fn path_detector_log(msg: impl std::fmt::Display) {
+    eprintln!("[path_detector] {}", msg);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // NOTE: eprintln! output is captured by the test runner and visible
+    // in test output on failure. See installer.rs for details.
+
+    #[test]
+    fn detect_works_with_logging() {
+        // detect() must complete without panicking and return a well-formed
+        // result, even with the new eprintln! calls for logging.
+        let result = detect();
+
+        // Assert the result is well-formed (any DetectionMethod is valid)
+        match result.method {
+            DetectionMethod::Native
+            | DetectionMethod::Wine
+            | DetectionMethod::Proton
+            | DetectionMethod::Wsl
+            | DetectionMethod::Manual => {}
+        }
+
+        // If a path was found, it should be non-empty
+        if let Some(ref p) = result.path {
+            assert!(!p.as_os_str().is_empty(), "path should not be empty string");
+        }
+    }
 
     #[test]
     fn detect_returns_manual_when_no_reaper_installed() {
@@ -215,6 +334,7 @@ mod tests {
             DetectionMethod::Native
             | DetectionMethod::Wine
             | DetectionMethod::Proton
+            | DetectionMethod::Wsl
             | DetectionMethod::Manual => {}
         }
     }

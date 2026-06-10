@@ -1,3 +1,4 @@
+import { CORNER_RADIUS_FACTOR } from './api';
 import type { ProcessingOutput } from './api';
 
 interface StatePreviewProps {
@@ -13,6 +14,14 @@ interface StatePreviewProps {
 const MAX_STATE_DISPLAY = 150;
 /// Cap strip display width to fit within the preview area.
 const MAX_STRIP_DISPLAY = 500;
+
+/// Compute the corner radius matching Rust's `icon_corner_radius`.
+/// Formula: `Math.max(2, Math.floor(scale * CORNER_RADIUS_FACTOR + 0.5))`,
+/// then clamped to `padding` when padding > 0.
+export function getCornerRadius(scale: number, padding: number): number {
+  const r = Math.max(2, Math.floor(scale * CORNER_RADIUS_FACTOR + 0.5));
+  return padding > 0 ? Math.min(r, padding) : r;
+}
 
 const STATE_LABELS = ['Normal', 'Hover', 'Active'];
 
@@ -103,6 +112,8 @@ function renderStateView(
   return (
     <>
       {sortedScales.map(([scale, group]) => {
+        const clR = getCornerRadius(scale, padding);
+        const dispR = clR * getDisplayScale(scale);
         const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
         const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
 
@@ -135,6 +146,7 @@ function renderStateView(
                           backgroundImage: `url(${offSrc})`,
                           backgroundSize: `${scale * 3 * getDisplayScale(scale)}px ${scale * getDisplayScale(scale)}px`,
                           backgroundPosition: `${-i * scale * getDisplayScale(scale)}px 0`,
+                          borderRadius: `${dispR}px`,
                         }}
                       />
                       <div
@@ -169,6 +181,7 @@ function renderStateView(
                           backgroundImage: `url(${onSrc})`,
                           backgroundSize: `${scale * 3 * getDisplayScale(scale)}px ${scale * getDisplayScale(scale)}px`,
                           backgroundPosition: `${-i * scale * getDisplayScale(scale)}px 0`,
+                          borderRadius: `${dispR}px`,
                         }}
                       />
                       <div
@@ -195,12 +208,14 @@ function renderStateView(
 
 function renderStripView(
   sortedScales: [number, { off?: ProcessingOutput; on?: ProcessingOutput }][],
-  _padding: number,
+  padding: number,
   isToggle: boolean,
 ) {
   return (
     <>
       {sortedScales.map(([scale, group]) => {
+        const clR = getCornerRadius(scale, padding);
+        const dispR = clR * getStripScale(scale);
         const offSrc = ensureDataUri(group.off?.preview_base64 ?? null);
         const onSrc = ensureDataUri(group.on?.preview_base64 ?? null);
         const stripWidth = scale * 3;
@@ -230,6 +245,7 @@ function renderStripView(
                     style={{
                       width: `${displayW}px`,
                       height: `${displayH}px`,
+                      borderRadius: `${dispR}px`,
                     }}
                   />
                 </div>
@@ -250,6 +266,7 @@ function renderStripView(
                     style={{
                       width: `${displayW}px`,
                       height: `${displayH}px`,
+                      borderRadius: `${dispR}px`,
                     }}
                   />
                 </div>

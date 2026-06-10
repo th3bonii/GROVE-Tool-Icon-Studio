@@ -1,23 +1,19 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { CropArea } from './api';
+import { MIN_CROP_SIZE, Corner, DragMode, hitTestCorner, insideRect, cornerCursor, clampRect, getCanvasCoords } from './cropper-math';
 
 interface ImageCropperProps {
   imageSrc: string;
   onCropChange: (crop: CropArea | null) => void;
 }
 
-const MIN_CROP_SIZE = 10;
 const HANDLE_SIZE = 8;
-const HIT_THRESHOLD = 10;
 const OVERLAY_ALPHA = 'rgba(0, 0, 0, 0.5)';
 const BORDER_COLOR = '#fff';
 const HANDLE_FILL = '#fff';
 const HANDLE_STROKE = '#333';
 const STROKE_WIDTH = 2;
 const LABEL_FONT = '14px sans-serif';
-
-type DragMode = 'idle' | 'draw' | 'move' | 'resize';
-type Corner = 'tl' | 'tr' | 'bl' | 'br';
 
 interface DragState {
   mode: DragMode;
@@ -34,48 +30,6 @@ interface DragState {
 
 function makeDragState(): DragState {
   return { mode: 'idle', corner: null, startX: 0, startY: 0, origX: 0, origY: 0, origSize: 0 };
-}
-
-/** Get the corner at (px, py) if within threshold, or null. */
-function hitTestCorner(
-  px: number, py: number,
-  crop: { x: number; y: number; size: number },
-): Corner | null {
-  const { x, y, size } = crop;
-  const corners: { corner: Corner; cx: number; cy: number }[] = [
-    { corner: 'tl', cx: x, cy: y },
-    { corner: 'tr', cx: x + size, cy: y },
-    { corner: 'bl', cx: x, cy: y + size },
-    { corner: 'br', cx: x + size, cy: y + size },
-  ];
-  for (const c of corners) {
-    if (Math.abs(px - c.cx) <= HIT_THRESHOLD && Math.abs(py - c.cy) <= HIT_THRESHOLD) {
-      return c.corner;
-    }
-  }
-  return null;
-}
-
-/** Check if (px, py) is inside the crop rect (excluding corner zones). */
-function insideRect(
-  px: number, py: number,
-  crop: { x: number; y: number; size: number },
-): boolean {
-  const margin = HIT_THRESHOLD;
-  return (
-    px >= crop.x + margin && px <= crop.x + crop.size - margin &&
-    py >= crop.y + margin && py <= crop.y + crop.size - margin
-  );
-}
-
-/** Map a corner to a CSS cursor name. */
-function cornerCursor(corner: Corner): string {
-  switch (corner) {
-    case 'tl': return 'nwse-resize';
-    case 'br': return 'nwse-resize';
-    case 'tr': return 'nesw-resize';
-    case 'bl': return 'nesw-resize';
-  }
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -108,15 +62,6 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
       width: Math.round(canvasCrop.size * scaleX),
       height: Math.round(canvasCrop.size * scaleY),
     });
-  }, []);
-
-  const clampRect = useCallback((
-    x: number, y: number, size: number, canvasW: number, canvasH: number,
-  ) => {
-    const s = Math.max(MIN_CROP_SIZE, size);
-    const cx = Math.max(0, Math.min(x, canvasW - s));
-    const cy = Math.max(0, Math.min(y, canvasH - s));
-    return { x: cx, y: cy, size: Math.min(s, canvasW - cx, canvasH - cy) };
   }, []);
 
   // ── Drawing ─────────────────────────────────────────────────────────────────
@@ -215,18 +160,6 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     emitCrop(defaultCrop);
   }, [imageLoaded, drawScene, emitCrop]);
 
-  // ── Coordinate conversion ───────────────────────────────────────────────────
-
-  const getCanvasCoords = useCallback((clientX: number, clientY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left) * (canvas.width / rect.width),
-      y: (clientY - rect.top) * (canvas.height / rect.height),
-    };
-  }, []);
-
   // ── Cursor on hover (no drag) ───────────────────────────────────────────────
 
   const updateCursor = useCallback((px: number, py: number) => {
@@ -242,7 +175,7 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
   // ── Mouse handlers ──────────────────────────────────────────────────────────
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const pos = getCanvasCoords(e.clientX, e.clientY);
+    const pos = getCanvasCoords(e.clientX, e.clientY, canvasRef.current);
     const crop = currentCropRef.current;
     if (!crop) return;
 
@@ -273,10 +206,10 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
       startX: pos.x, startY: pos.y,
       origX: pos.x, origY: pos.y, origSize: 0,
     };
-  }, [getCanvasCoords]);
+  }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const pos = getCanvasCoords(e.clientX, e.clientY);
+    const pos = getCanvasCoords(e.clientX, e.clientY, canvasRef.current);
     const drag = dragRef.current;
 
     if (drag.mode === 'idle') {
@@ -338,7 +271,7 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
       drawScene(clamped.x, clamped.y, clamped.size);
       return;
     }
-  }, [getCanvasCoords, drawScene, clampRect, updateCursor]);
+  }, [drawScene, updateCursor]);
 
   const handleMouseUp = useCallback(() => {
     const drag = dragRef.current;
@@ -374,7 +307,7 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     currentCropRef.current = clamped;
     drawScene(clamped.x, clamped.y, clamped.size);
     emitCrop(clamped);
-  }, [clampRect, drawScene, emitCrop]);
+  }, [drawScene, emitCrop]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 

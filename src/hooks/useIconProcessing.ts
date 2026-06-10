@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { processIcon } from '../api';
-import type { CropArea, ProcessingOutput } from '../api';
+import type { CropArea, HsbAdjustment, ProcessingOutput } from '../api';
 
 export function useIconProcessing() {
   const [processing, setProcessing] = useState(false);
@@ -13,13 +13,15 @@ export function useIconProcessing() {
     crop: CropArea,
     padding: number,
     isToggle: boolean,
+    offAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
+    onAdjustments?: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
   ) => {
     setProcessing(true);
     setError(null);
     setProcessResults(null);
 
     try {
-      const res = await processIcon(selectedFile, reaperPath, crop, padding, isToggle);
+      const res = await processIcon(selectedFile, reaperPath, crop, padding, isToggle, offAdjustments, onAdjustments);
       setProcessResults(res);
     } catch (err) {
       setError(`Processing failed: ${err}`);

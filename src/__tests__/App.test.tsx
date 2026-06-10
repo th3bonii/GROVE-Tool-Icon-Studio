@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import App from '../App';
 
 // Mock Tauri invoke — used by api.ts (detectReaperPath, processIcon, previewIcon, etc.)
@@ -86,7 +86,7 @@ describe('App', () => {
     });
   });
 
-  it('renders the size selector radio buttons', async () => {
+  it('renders the padding slider', async () => {
     mockInvoke.mockResolvedValue({ path: '/mock/reaper', method: 'Native' });
     mockOpen.mockResolvedValue('/mock/icons/source.png');
 
@@ -99,12 +99,20 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Select Icon File'));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Standard (30×30)')).toBeInTheDocument();
-      expect(screen.getByLabelText('Double Width (38×38)')).toBeInTheDocument();
+      expect(screen.getByText(/Padding:/)).toBeInTheDocument();
     });
+
+    // Slider should show default value of 4px
+    expect(screen.getByText('4px')).toBeInTheDocument();
+
+    // Slider marks should show 0-4 range
+    // (use getAllByText since HSB slider values also show "0")
+    const zeroElements = screen.getAllByText('0');
+    expect(zeroElements.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('4')).toBeInTheDocument();
   });
 
-  it('defaults to Standard (30×30) size', async () => {
+  it('renders the toggle checkbox', async () => {
     mockInvoke.mockResolvedValue({ path: '/mock/reaper', method: 'Native' });
     mockOpen.mockResolvedValue('/mock/icons/source.png');
 
@@ -117,11 +125,15 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Select Icon File'));
 
     await waitFor(() => {
-      const standardRadio = screen.getByLabelText(
-        'Standard (30×30)',
-      ) as HTMLInputElement;
-      expect(standardRadio.checked).toBe(true);
+      expect(
+        screen.getByLabelText('Generate ON/OFF toggle variant'),
+      ).toBeInTheDocument();
     });
+
+    const toggle = screen.getByLabelText(
+      'Generate ON/OFF toggle variant',
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
   });
 
   it('shows the file path after selecting an icon', async () => {
@@ -147,6 +159,19 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Change Icon')).toBeInTheDocument();
+    });
+  });
+
+  it('shows the computed install path when REAPER path is detected', async () => {
+    mockInvoke.mockResolvedValue({ path: '/mock/reaper', method: 'Native' });
+
+    render(<App />);
+
+    await waitFor(() => {
+      const section = screen.getByText('REAPER Resource Path').closest('section')!;
+      expect(
+        within(section).getByText('/mock/reaper/Data/toolbar_icons/'),
+      ).toBeInTheDocument();
     });
   });
 });

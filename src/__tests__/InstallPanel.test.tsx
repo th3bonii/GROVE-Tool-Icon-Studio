@@ -11,6 +11,7 @@ describe('InstallPanel', () => {
     installEnabled: false,
     onIconNameChange: vi.fn(),
     onInstallEnabledChange: vi.fn(),
+    isToggle: false,
   };
 
   it('renders the target path when reaperPath is provided', () => {

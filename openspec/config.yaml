@@ -24,19 +24,16 @@ context: |
     Rust (cargo test):
       - Test runner: cargo test (native Rust)
       - Test style: #[cfg(test)] mod tests inline in source files
-      - Test count: 6 tests (4 in image_processor.rs, 2 in path_detector.rs)
-      - Coverage: Not configured
-      - Linter: clippy available but not configured in project
-      - Formatter: cargo fmt available but not configured in project
-      - Test layers: Unit only
+      - Test count: 93 tests (86 in image_processor.rs/installer.rs, 3 in path_detector.rs, 4 in tauri commands)
     TypeScript/React:
-      - Test runner: NONE (not installed)
-      - Test framework: NONE
+      - Test runner: vitest 4.1.8
+      - Test framework: @testing-library/react 16.3.2 + @testing-library/jest-dom 6.9.1
       - Coverage: NONE
+      - jsdom: true (configured in vite.config.ts → test.environment)
       - Linter: ESLint 9.17.0 (installed but no eslint.config.* found — lint script may fail)
       - Type checker: TypeScript 5.6.2 (tsc -b)
-      - Formatter: NONE (prettier not installed)
-      - Test layers: NONE
+      - Formatter: prettier 3.8.3 (installed)
+      - Test layers: Unit (jsdom)
 
   Style:
     Rust: idiomatic Rust 2021 edition, thiserror for errors, serde for serialization
@@ -61,8 +58,10 @@ rules:
     - Keep Rust and TypeScript conventions consistent
     tdd: true
     test_command: "cargo test"
+    test_command_js: "npx vitest run"
   verify:
     test_command: "cargo test"
+    test_command_js: "npx vitest run"
     build_command: "npm run build"
     coverage_threshold: 0
   archive:
@@ -70,7 +69,7 @@ rules:
 
 testing:
   strict_tdd: true
-  strict_tdd_note: "Enforced for Rust backend (cargo test available). Frontend has no test runner — strict_tdd currently applies to Rust code only."
+  strict_tdd_note: "Enforced for Rust backend (cargo test available). Frontend also has vitest + @testing-library/react — strict_tdd applies to both crates."
   layers:
     - layer: unit
       runner: cargo test
@@ -78,16 +77,16 @@ testing:
       langs: [rust]
       coverage: false
     - layer: unit
-      runner: none
+      runner: npx vitest run
       path: src/
       langs: [typescript]
       coverage: false
-      note: "No JS/TS test runner installed. Consider adding Vitest or Jest."
+      note: "vitest 4.1.8 with @testing-library/react 16.3.2, jsdom environment."
   coverage_tool: none
   linters:
     - tool: eslint
       langs: [typescript]
-      config: eslint.config.* (missing — needs creation)
+      config: eslint.config.js (present)
     - tool: clippy
       langs: [rust]
       config: available via cargo clippy (not explicitly configured)

@@ -9,6 +9,32 @@ fn detect_reaper_path() -> Result<path_detector::DetectionResult, String> {
     Ok(path_detector::detect())
 }
 
+/// Build an `IconConfig` from optional Tauri command parameters.
+///
+/// Wraps the common pattern of unwrapping `Option` params with defaults:
+/// - `padding` defaults to `4`
+/// - `is_toggle` defaults to `false`
+/// - `off_adjustments` / `on_adjustments` default to `Default::default()` arrays
+fn build_icon_config(
+    padding: Option<u8>,
+    is_toggle: Option<bool>,
+    off_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
+    on_adjustments: Option<[image_processor::HsbAdjustment; 3]>,
+) -> image_processor::IconConfig {
+    let mut config = image_processor::IconConfig {
+        padding: padding.unwrap_or(4),
+        is_toggle: is_toggle.unwrap_or(false),
+        ..Default::default()
+    };
+    if let Some(adj) = off_adjustments {
+        config.off_adjustments = adj;
+    }
+    if let Some(adj) = on_adjustments {
+        config.on_adjustments = adj;
+    }
+    config
+}
+
 #[tauri::command]
 async fn process_icon(
     input_path: String,
@@ -30,34 +56,34 @@ async fn process_icon(
             .unwrap_or("icon")
             .to_string();
 
-        let mut config = image_processor::IconConfig {
-            padding: padding.unwrap_or(2),
-            is_toggle: is_toggle.unwrap_or(false),
-            ..Default::default()
-        };
-        if let Some(adj) = off_adjustments {
-            config.off_adjustments = adj;
-        }
-        if let Some(adj) = on_adjustments {
-            config.on_adjustments = adj;
-        }
+        let config = build_icon_config(padding, is_toggle, off_adjustments, on_adjustments);
 
         // Use raw output mode to avoid encode→decode roundtrip
         let results = image_processor::generate_icon_set_raw(
             input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
         ).map_err(|e| e.to_string())?;
 
-        // Write raw bytes directly to disk
+        // Write raw bytes directly to disk, distributing each scale
+        // to the correct REAPER scale subdirectory.
+        let scale_subdirs = ["", "150", "200"];
+        let outputs_per_scale = results.len() / image_processor::REAPER_SCALES.len();
         let written: Vec<image_processor::ProcessingOutput> = results
             .into_iter()
-            .map(|output| {
+            .enumerate()
+            .map(|(idx, output)| {
+                let scale_idx = idx / outputs_per_scale;
+                let sub_dir = scale_subdirs.get(scale_idx).unwrap_or(&"");
+                let target_dir = Path::new(&output_dir_owned).join(sub_dir);
+
                 let suffix = &output.suffix;
                 let output_name = if suffix.is_empty() {
                     format!("{}.png", filename)
                 } else {
                     format!("{}{}.png", filename, suffix)
                 };
-                let output_path = Path::new(&output_dir_owned).join(&output_name);
+
+                let _ = std::fs::create_dir_all(&target_dir);
+                let output_path = target_dir.join(&output_name);
 
                 eprintln!("[process_icon] writing {} ({}x{})", output_path.display(), output.width, output.height);
                 if let Err(e) = std::fs::write(&output_path, &output.data) {
@@ -94,17 +120,7 @@ async fn preview_icon(
     let result = tokio::task::spawn_blocking(move || {
         let input = Path::new(&input_path_owned);
 
-        let mut config = image_processor::IconConfig {
-            padding: padding.unwrap_or(2),
-            is_toggle: is_toggle.unwrap_or(false),
-            ..Default::default()
-        };
-        if let Some(adj) = off_adjustments {
-            config.off_adjustments = adj;
-        }
-        if let Some(adj) = on_adjustments {
-            config.on_adjustments = adj;
-        }
+        let config = build_icon_config(padding, is_toggle, off_adjustments, on_adjustments);
 
         image_processor::generate_icon_set(
             input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
@@ -142,17 +158,7 @@ async fn install_icon_set(
             target_owned
         };
 
-        let mut config = image_processor::IconConfig {
-            padding: padding.unwrap_or(2),
-            is_toggle: is_toggle.unwrap_or(false),
-            ..Default::default()
-        };
-        if let Some(adj) = off_adjustments {
-            config.off_adjustments = adj;
-        }
-        if let Some(adj) = on_adjustments {
-            config.on_adjustments = adj;
-        }
+        let config = build_icon_config(padding, is_toggle, off_adjustments, on_adjustments);
 
         let results = image_processor::generate_icon_set_raw(
             input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
@@ -232,6 +238,57 @@ mod tests {
     fn create_test_png(path: &std::path::Path) {
         let img = RgbaImage::from_pixel(64, 64, image::Rgba([100, 150, 200, 255]));
         img.save(path).expect("Failed to create test PNG");
+    }
+
+    // -----------------------------------------------------------------------
+    // build_icon_config unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_icon_config_defaults() {
+        let config = build_icon_config(None, None, None, None);
+        assert_eq!(config.padding, 4, "default padding should be 4");
+        assert!(!config.is_toggle, "default is_toggle should be false");
+        assert_eq!(config.hover_brightness, 30, "default hover_brightness");
+        assert_eq!(config.click_brightness, -40, "default click_brightness");
+    }
+
+    #[test]
+    fn build_icon_config_applies_padding() {
+        let config = build_icon_config(Some(2), None, None, None);
+        assert_eq!(config.padding, 2, "padding should be 2");
+    }
+
+    #[test]
+    fn build_icon_config_applies_toggle() {
+        let config = build_icon_config(None, Some(true), None, None);
+        assert!(config.is_toggle, "is_toggle should be true");
+    }
+
+    #[test]
+    fn build_icon_config_applies_hsb_adjustments() {
+        let identity = image_processor::HsbAdjustment {
+            hue_shift: 10.0, sat_delta: -0.2, bri_delta: 0.5,
+        };
+        let adjustments = [identity; 3];
+        let config = build_icon_config(None, None, Some(adjustments), None);
+        assert_eq!(config.off_adjustments[0].hue_shift, 10.0);
+        assert_eq!(config.off_adjustments[0].sat_delta, -0.2);
+        assert_eq!(config.off_adjustments[0].bri_delta, 0.5);
+        // on_adjustments should still be defaults
+        assert_eq!(config.on_adjustments[0].hue_shift, 0.0);
+    }
+
+    #[test]
+    fn build_icon_config_applies_on_adjustments() {
+        let identity = image_processor::HsbAdjustment {
+            hue_shift: 30.0, sat_delta: 0.1, bri_delta: -0.3,
+        };
+        let adjustments = [identity; 3];
+        let config = build_icon_config(None, None, None, Some(adjustments));
+        assert_eq!(config.on_adjustments[0].hue_shift, 30.0);
+        assert_eq!(config.on_adjustments[0].sat_delta, 0.1);
+        assert_eq!(config.on_adjustments[0].bri_delta, -0.3);
     }
 
     // -----------------------------------------------------------------------

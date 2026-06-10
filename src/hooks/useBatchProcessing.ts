@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { previewIcon } from '../api';
 import type { CropArea, HsbAdjustment, ProcessingOutput } from '../api';
 
@@ -14,6 +14,12 @@ export function useBatchProcessing() {
   const [files, setFiles] = useState<BatchFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const filesRef = useRef(files);
+
+  // Sync ref with latest files value on every render
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   const addFiles = useCallback((newFiles: string[]) => {
     const entries: BatchFile[] = newFiles.map((path) => {
@@ -42,11 +48,12 @@ export function useBatchProcessing() {
     onAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
   ) => {
     setIsProcessing(true);
-    const total = files.length;
+    const currentFiles = filesRef.current;
+    const total = currentFiles.length;
     let done = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (let i = 0; i < currentFiles.length; i++) {
+      const file = currentFiles[i];
       if (file.status === 'done') {
         done++;
         continue;
@@ -86,7 +93,7 @@ export function useBatchProcessing() {
     }
 
     setIsProcessing(false);
-  }, [files]);
+  }, []);
 
   const resetProgress = useCallback(() => {
     setFiles((prev) =>
