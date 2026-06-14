@@ -81,7 +81,7 @@ jobs:
         with:
           name: bundles-${{ matrix.os }}
           path: |
-            src-tauri/target/release/bundle/${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'deb' || matrix.target == 'x86_64-apple-darwin' && 'dmg' || 'msi' }}/*
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*
 
   release:
     name: Create GitHub Release
