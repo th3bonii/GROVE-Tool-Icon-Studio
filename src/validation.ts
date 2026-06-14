@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { invoke } from '@tauri-apps/api/core';
 
 // ── IPC Response Schemas ──────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ export async function safeInvoke<T>(
   params: Record<string, unknown>,
   schema: z.ZodType<T>,
 ): Promise<T> {
-  const result = await (await import('@tauri-apps/api/core')).invoke(cmd, params);
+  const result = await invoke(cmd, params);
   try {
     return schema.parse(result);
   } catch (err) {

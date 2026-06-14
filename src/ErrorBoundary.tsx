@@ -19,6 +19,20 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     return { hasError: true, error };
   }
 
+  componentDidCatch(error: Error, _info: React.ErrorInfo) {
+    // Fire-and-forget: persist the error via Tauri IPC without blocking render recovery.
+    // Dynamic import avoids breaking environments where @tauri-apps/api/core may not
+    // be available (e.g., plain browser dev).
+    import('@tauri-apps/api/core').then(({ invoke }) => {
+      invoke('write_error_log', {
+        message: error.message,
+        stack: error.stack ?? null,
+      }).catch(() => {
+        // Silently ignore — error logging must never block the UI.
+      });
+    });
+  }
+
   render() {
     if (this.state.hasError) {
       return (

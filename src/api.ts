@@ -7,21 +7,6 @@ import type { CropArea, HsbAdjustment, ProcessingOutput, DetectionResult } from 
 export type { CropArea, HsbAdjustment, ProcessingOutput, DetectionResult };
 export { IPCValidationError } from './validation';
 
-/**
- * Configuration for multi-scale icon generation.
- * Matches the Rust `image_processor::IconConfig` struct.
- */
-export interface IconConfig {
-  /** Padding inset in pixels (0–4, default 2). */
-  padding: number;
-  /** If true, generate both OFF and ON variants. */
-  is_toggle: boolean;
-  /** HSB adjustments for OFF states: [Normal, Hover, Active]. */
-  off_adjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
-  /** HSB adjustments for ON states: [Normal, Hover, Active]. */
-  on_adjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
-}
-
 /// Corner radius factor for rounded-rect mask.
 /// Applied as `Math.floor(scale * CORNER_RADIUS_FACTOR + 0.5)` with a minimum of 2.
 /// Must match `image_processor::CORNER_RADIUS_FACTOR` in Rust.
@@ -202,6 +187,25 @@ export async function getIconStrip(
     reaperResourcePath,
     iconName,
   }, z.string());
+}
+
+/**
+ * Batch-read installed icon files and return a map of name → base64 PNG.
+ *
+ * Fetches all thumbnails in a single IPC call instead of N individual calls.
+ *
+ * @param reaperResourcePath Absolute path to the REAPER resource directory.
+ * @param names              Icon names to fetch (without .png extension).
+ * @returns Record of name → base64-encoded PNG data (missing icons omitted).
+ */
+export async function getIconThumbnails(
+  reaperResourcePath: string,
+  names: string[],
+): Promise<Record<string, string>> {
+  return safeInvoke('get_icon_thumbnails', {
+    reaperResourcePath,
+    names,
+  }, z.record(z.string(), z.string()));
 }
 
 /**

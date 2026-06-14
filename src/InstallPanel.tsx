@@ -1,26 +1,20 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 
 interface InstallPanelProps {
   reaperPath: string | null;
-  onInstall: (fileName: string) => void;
   installedIcons: string[];
-  disabled: boolean;
-  iconName: string;
-  installEnabled: boolean;
-  onIconNameChange: (name: string) => void;
-  onInstallEnabledChange: (enabled: boolean) => void;
-  isToggle: boolean;
-  onDelete?: (iconName: string) => void;
-  onExport?: (iconName: string) => void;
+  onDeleteSelected?: (names: string[]) => Promise<void>;
+  onExportSelected?: (names: string[]) => Promise<void>;
   onPreview?: (iconName: string) => Promise<string | null>;
   previewStrip?: string | null;
   previewIconName?: string | null;
+  thumbnails?: Record<string, string>;
 }
 
 const SCALE_DIRS = [
-  { label: '100%', scale: 30, pathSuffix: 'Data/toolbar_icons/' },
-  { label: '150%', scale: 45, pathSuffix: 'Data/toolbar_icons/150/' },
-  { label: '200%', scale: 60, pathSuffix: 'Data/toolbar_icons/200/' },
+  { label: '100%', pathSuffix: 'Data/toolbar_icons/' },
+  { label: '150%', pathSuffix: 'Data/toolbar_icons/150/' },
+  { label: '200%', pathSuffix: 'Data/toolbar_icons/200/' },
 ] as const;
 
 function ensureDataUri(base64: string | null): string {
@@ -30,54 +24,41 @@ function ensureDataUri(base64: string | null): string {
 
 export default function InstallPanel({
   reaperPath,
-  onInstall,
   installedIcons,
-  disabled,
-  iconName = '',
-  installEnabled = false,
-  onIconNameChange = () => {},
-  onInstallEnabledChange = () => {},
-  isToggle = false,
-  onDelete,
-  onExport,
+  onDeleteSelected,
+  onExportSelected,
   onPreview,
   previewStrip,
   previewIconName,
+  thumbnails = {},
 }: InstallPanelProps) {
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [selectedIcons, setSelectedIcons] = useState<Set<string>>(new Set());
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const canInstall =
-    !disabled &&
-    !!reaperPath &&
-    iconName.trim().length > 0 &&
-    installEnabled;
+  const hasSelection = selectedIcons.size > 0;
 
-  const handleInstall = () => {
-    if (!canInstall) return;
-    onInstall(iconName.trim());
-  };
+  // ── Selection handling ──────────────────────────────────────────────────
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && canInstall) {
-      handleInstall();
-    }
-  };
+  const toggleSelection = useCallback((name: string) => {
+    setSelectedIcons((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
 
-  const handleDeleteClick = (name: string) => {
-    setConfirmDelete(name);
-  };
+  const selectAll = useCallback(() => {
+    setSelectedIcons(new Set(installedIcons));
+  }, [installedIcons]);
 
-  const handleConfirmDelete = (name: string) => {
-    if (onDelete) {
-      onDelete(name);
-    }
-    setConfirmDelete(null);
-  };
+  const deselectAll = useCallback(() => {
+    setSelectedIcons(new Set());
+  }, []);
 
-  const handleCancelDelete = () => {
-    setConfirmDelete(null);
-  };
+  // ── Actions ─────────────────────────────────────────────────────────────
 
   const handlePreviewClick = async (name: string) => {
     if (!onPreview) return;
@@ -89,131 +70,168 @@ export default function InstallPanel({
     }
   };
 
-  const filesPerScale = isToggle ? 2 : 1;
+  const handleDeleteAction = useCallback(async () => {
+    if (!onDeleteSelected || !hasSelection) return;
+    setActionLoading(true);
+    try {
+      await onDeleteSelected(Array.from(selectedIcons));
+      setSelectedIcons(new Set());
+      setShowDeleteConfirm(false);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [onDeleteSelected, selectedIcons, hasSelection]);
+
+  const handleExportAction = useCallback(async () => {
+    if (!onExportSelected || !hasSelection) return;
+    setActionLoading(true);
+    try {
+      await onExportSelected(Array.from(selectedIcons));
+    } finally {
+      setActionLoading(false);
+    }
+  }, [onExportSelected, selectedIcons, hasSelection]);
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   return (
     <div className="install-panel">
-      <h2>Install to REAPER</h2>
-
-      {/* File name input */}
-      <div className="install-field">
-        <label htmlFor="install-filename" className="install-field-label">
-          Icon file name
-        </label>
-        <input
-          id="install-filename"
-          type="text"
-          className="install-filename-input"
-          placeholder="icon-name"
-          value={iconName}
-          onChange={(e) => onIconNameChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={disabled || !reaperPath}
-        />
-      </div>
-
-      {/* Install to REAPER toggle */}
-      <div className="install-toggle">
-        <label className="install-toggle-label">
-          <input
-            type="checkbox"
-            checked={installEnabled}
-            onChange={(e) => onInstallEnabledChange(e.target.checked)}
-            disabled={!reaperPath}
-          />
-          Install to REAPER
-        </label>
-      </div>
-
       {/* REAPER path info */}
       {reaperPath ? (
         <div className="install-scale-paths">
-          <p className="install-targets-heading">
-            Install Targets
-          </p>
+          <p className="install-targets-heading">Install Targets</p>
           {SCALE_DIRS.map((dir) => (
-            <div
-              key={dir.scale}
-              className="install-scale-row"
-            >
-              <span className="install-scale-badge">
-                {dir.label}
-              </span>
+            <div key={dir.label} className="install-scale-row">
+              <span className="install-scale-badge">{dir.label}</span>
               <code className="install-scale-path">
                 {reaperPath}/{dir.pathSuffix}
               </code>
-              <span className="install-scale-count">
-                {filesPerScale} file{filesPerScale > 1 ? 's' : ''}
-              </span>
             </div>
           ))}
         </div>
       ) : (
         <p className="install-no-path">
-          REAPER path not detected. Install will not be available.
+          REAPER path not detected.
         </p>
       )}
 
       {/* Installed icons list */}
       {installedIcons.length > 0 && (
         <div className="install-installed-section">
-          <p className="install-installed-heading">
-            Installed icons:
-          </p>
-          <div className="install-installed-tags">
-            {installedIcons.map((name) => (
-              <div key={name} className="install-installed-item">
-                <span
-                  className="install-installed-tag install-installed-tag--clickable"
-                  onClick={() => handlePreviewClick(name)}
-                  title="Preview this icon"
-                >
-                  {name}
-                </span>
-                {previewLoading === name && (
-                  <span className="install-installed-loading">…</span>
-                )}
-                {onDelete && (
-                  <>
-                    {confirmDelete === name ? (
-                      <span className="install-installed-confirm">
-                        <button
-                          className="install-installed-confirm-yes"
-                          onClick={() => handleConfirmDelete(name)}
-                          title="Confirm delete"
-                        >
-                          ✓
-                        </button>
-                        <button
-                          className="install-installed-confirm-no"
-                          onClick={handleCancelDelete}
-                          title="Cancel delete"
-                        >
-                          ✗
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        className="install-installed-btn install-installed-btn--delete"
-                        onClick={() => handleDeleteClick(name)}
-                        title="Delete icon"
-                      >
-                        🗑
-                      </button>
-                    )}
-                  </>
-                )}
-                {onExport && (
-                  <button
-                    className="install-installed-btn install-installed-btn--export"
-                    onClick={() => onExport(name)}
-                    title="Export icon"
+          {/* Header bar: selection controls + global actions */}
+          <div className="install-installed-header">
+            <span className="install-installed-heading">
+              Installed icons ({installedIcons.length})
+            </span>
+            <div className="install-installed-header-actions">
+              {hasSelection ? (
+                <>
+                  <a
+                    href="#"
+                    className="install-header-link"
+                    onClick={(e) => { e.preventDefault(); deselectAll(); }}
                   >
-                    📤
+                    Deselect all
+                  </a>
+                  <span className="install-header-count">
+                    {selectedIcons.size} selected
+                  </span>
+                </>
+              ) : (
+                <a
+                  href="#"
+                  className="install-header-link"
+                  onClick={(e) => { e.preventDefault(); selectAll(); }}
+                >
+                  Select all
+                </a>
+              )}
+
+              {hasSelection && showDeleteConfirm ? (
+                <span className="install-header-confirm">
+                  <span className="install-header-confirm-text">
+                    Delete {selectedIcons.size} icon{selectedIcons.size > 1 ? 's' : ''}?
+                  </span>
+                  <button
+                    className="install-header-btn install-header-btn--confirm-yes"
+                    onClick={handleDeleteAction}
+                    disabled={actionLoading}
+                  >
+                    ✓ Yes
                   </button>
-                )}
-              </div>
-            ))}
+                  <button
+                    className="install-header-btn install-header-btn--confirm-no"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    disabled={actionLoading}
+                  >
+                    ✗ No
+                  </button>
+                </span>
+              ) : (
+                <>
+                  <button
+                    className="install-header-btn install-header-btn--delete"
+                    disabled={!hasSelection || actionLoading}
+                    onClick={() => setShowDeleteConfirm(true)}
+                  >
+                    Delete Selected
+                  </button>
+                  <button
+                    className="install-header-btn install-header-btn--export"
+                    disabled={!hasSelection || actionLoading}
+                    onClick={handleExportAction}
+                  >
+                    Export Selected
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Icon grid */}
+          <div className="install-installed-tags">
+            {installedIcons.map((name) => {
+              const isSelected = selectedIcons.has(name);
+              return (
+                <div
+                  key={name}
+                  className={
+                    'install-installed-item' +
+                    (isSelected ? ' install-installed-item--selected' : '')
+                  }
+                >
+                  <label className="install-installed-checkbox-label">
+                    <input
+                      type="checkbox"
+                      className="install-installed-checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelection(name)}
+                    />
+                  </label>
+                  {thumbnails[name] ? (
+                    <img
+                      className="install-installed-thumb"
+                      src={ensureDataUri(thumbnails[name])}
+                      alt={name}
+                      width={16}
+                      height={16}
+                    />
+                  ) : (
+                    <span className="install-installed-thumb install-installed-thumb--placeholder" />
+                  )}
+                  <span
+                    className="install-installed-tag install-installed-tag--clickable"
+                    onClick={() => handlePreviewClick(name)}
+                    title="Preview this icon"
+                  >
+                    {name}
+                  </span>
+                  {previewLoading === name && (
+                    <span className="install-installed-loading">…</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -233,15 +251,6 @@ export default function InstallPanel({
           </div>
         </div>
       )}
-
-      {/* Install button */}
-      <button
-        className="btn--primary install-button"
-        disabled={!canInstall}
-        onClick={handleInstall}
-      >
-        Install
-      </button>
     </div>
   );
 }

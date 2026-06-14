@@ -4,14 +4,7 @@ import InstallPanel from '../InstallPanel';
 describe('InstallPanel', () => {
   const baseProps = {
     reaperPath: '/home/user/REAPER',
-    onInstall: vi.fn(),
     installedIcons: ['existing-icon', 'another-icon'],
-    disabled: false,
-    iconName: '',
-    installEnabled: false,
-    onIconNameChange: vi.fn(),
-    onInstallEnabledChange: vi.fn(),
-    isToggle: false,
   };
 
   it('renders the target path when reaperPath is provided', () => {
@@ -31,9 +24,7 @@ describe('InstallPanel', () => {
     );
 
     expect(
-      screen.getByText(
-        'REAPER path not detected. Install will not be available.',
-      ),
+      screen.getByText('REAPER path not detected.'),
     ).toBeInTheDocument();
   });
 
@@ -44,96 +35,23 @@ describe('InstallPanel', () => {
     expect(screen.getByText('another-icon')).toBeInTheDocument();
   });
 
-  it('calls onInstall with the file name when Install button is clicked', () => {
-    const onInstall = vi.fn();
-    render(
-      <InstallPanel
-        {...baseProps}
-        onInstall={onInstall}
-        iconName="my-custom-icon"
-        installEnabled={true}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /install/i }));
-
-    expect(onInstall).toHaveBeenCalledWith('my-custom-icon');
-  });
-
-  it('calls onIconNameChange when typing in the input', () => {
-    const onIconNameChange = vi.fn();
-    render(
-      <InstallPanel
-        {...baseProps}
-        onIconNameChange={onIconNameChange}
-      />,
-    );
-
-    const input = screen.getByPlaceholderText('icon-name');
-    fireEvent.change(input, { target: { value: 'test-icon' } });
-
-    expect(onIconNameChange).toHaveBeenCalledWith('test-icon');
-  });
-
-  it('disables the Install button when disabled prop is true', () => {
-    render(<InstallPanel {...baseProps} disabled={true} />);
-
-    expect(screen.getByRole('button', { name: /install/i })).toBeDisabled();
-  });
-
-  it('disables the Install button when reaperPath is null', () => {
-    render(
-      <InstallPanel
-        {...baseProps}
-        reaperPath={null}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: /install/i })).toBeDisabled();
-  });
-
-  it('disables the Install button when file name is empty', () => {
-    render(<InstallPanel {...baseProps} iconName="" />);
-
-    expect(screen.getByRole('button', { name: /install/i })).toBeDisabled();
-  });
-
-  it('renders the "Install to REAPER" toggle checkbox', () => {
+  it('allows selecting and deselecting icons', () => {
     render(<InstallPanel {...baseProps} />);
 
-    expect(
-      screen.getByLabelText(/install to reaper/i),
-    ).toBeInTheDocument();
+    // Click "Select all"
+    fireEvent.click(screen.getByText('Select all'));
+    expect(screen.getByText('Deselect all')).toBeInTheDocument();
+    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
+
+    // Click "Deselect all"
+    fireEvent.click(screen.getByText('Deselect all'));
+    expect(screen.getByText('Select all')).toBeInTheDocument();
   });
 
-  it('renders the toggle checked when installEnabled is true', () => {
-    render(<InstallPanel {...baseProps} installEnabled={true} />);
+  it('renders thumbnail placeholders for icons', () => {
+    const { container } = render(<InstallPanel {...baseProps} />);
 
-    expect(
-      screen.getByLabelText(/install to reaper/i),
-    ).toBeChecked();
-  });
-
-  it('renders the toggle unchecked when installEnabled is false', () => {
-    render(<InstallPanel {...baseProps} installEnabled={false} />);
-
-    expect(
-      screen.getByLabelText(/install to reaper/i),
-    ).not.toBeChecked();
-  });
-
-  it('calls onInstallEnabledChange when toggling the checkbox', () => {
-    const onInstallEnabledChange = vi.fn();
-    render(
-      <InstallPanel
-        {...baseProps}
-        installEnabled={false}
-        onInstallEnabledChange={onInstallEnabledChange}
-      />,
-    );
-
-    fireEvent.click(screen.getByLabelText(/install to reaper/i));
-
-    expect(onInstallEnabledChange).toHaveBeenCalledWith(true);
+    const placeholders = container.querySelectorAll('.install-installed-thumb--placeholder');
+    expect(placeholders.length).toBe(2);
   });
 });

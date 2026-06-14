@@ -117,6 +117,7 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
   // ── Image loading ───────────────────────────────────────────────────────────
 
   useEffect(() => {
+    setImageLoaded(false);
     const img = new Image();
     img.onload = () => {
       imgRef.current = img;
@@ -149,10 +150,10 @@ export default function ImageCropper({ imageSrc, onCropChange }: ImageCropperPro
     const rawCropX = (img.naturalWidth - rawCropSize) / 2;
     const rawCropY = (img.naturalHeight - rawCropSize) / 2;
 
-    const scaleX = cw / img.naturalWidth;
-    const cCropX = Math.round(rawCropX * scaleX);
-    const cCropY = Math.round(rawCropY * scaleX);
-    const cCropSize = Math.round(rawCropSize * scaleX);
+    const scale = cw / img.naturalWidth;
+    const cCropX = Math.round(rawCropX * scale);
+    const cCropY = Math.round(rawCropY * scale);
+    const cCropSize = Math.round(rawCropSize * scale);
 
     const defaultCrop = { x: cCropX, y: cCropY, size: cCropSize };
     currentCropRef.current = defaultCrop;

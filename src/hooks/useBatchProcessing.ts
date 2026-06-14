@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { previewIcon } from '../api';
+import { previewIcon, installIconSet } from '../api';
 import type { CropArea, HsbAdjustment, ProcessingOutput } from '../api';
 
 export interface BatchFile {
@@ -46,6 +46,7 @@ export function useBatchProcessing() {
     isToggle: boolean,
     offAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
     onAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment],
+    reaperPath?: string | null,
   ) => {
     setIsProcessing(true);
     const currentFiles = filesRef.current;
@@ -74,6 +75,20 @@ export function useBatchProcessing() {
           offAdjustments,
           onAdjustments,
         );
+
+        // Install directly to REAPER toolbar_icons (same as single-file processing)
+        if (reaperPath) {
+          await installIconSet(
+            file.path,
+            reaperPath,
+            file.name,
+            crop ?? undefined,
+            padding,
+            isToggle,
+            offAdjustments,
+            onAdjustments,
+          );
+        }
 
         setFiles((prev) => {
           const next = [...prev];

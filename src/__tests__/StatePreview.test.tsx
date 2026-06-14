@@ -25,17 +25,17 @@ describe('StatePreview', () => {
     expect(screen.getByText(/no preview/i)).toBeInTheDocument();
   });
 
-  it('shows OFF state labels: Normal, Hover, Active', () => {
+  it('renders 3 state icons for OFF row', () => {
     const results: ProcessingOutput[] = [
       makePreviewOutput(30, 'data:image/png;base64,iVBORw0KGgo=', ''),
     ];
-    render(
+    const { container } = render(
       <StatePreview previewResults={results} padding={2} isToggle={false} />,
     );
 
-    expect(screen.getAllByText('Normal').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Hover').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Active').length).toBeGreaterThanOrEqual(1);
+    // Should render 3 state-icon divs (Normal, Hover, Active positions)
+    const icons = container.querySelectorAll('.state-icon');
+    expect(icons.length).toBe(3);
   });
 
   it('shows labels ON row when isToggle is true', () => {
@@ -63,7 +63,7 @@ describe('StatePreview', () => {
     expect(screen.queryByText('ON')).not.toBeInTheDocument();
   });
 
-  it('shows correct dimensions text per scale', () => {
+  it('shows scale headers per resolution', () => {
     const results: ProcessingOutput[] = [
       makePreviewOutput(30, 'data:image/png;base64,iVBORw0KGgo=', ''),
       makePreviewOutput(45, 'data:image/png;base64,iVBORw0KGgo=', ''),
@@ -72,8 +72,8 @@ describe('StatePreview', () => {
       <StatePreview previewResults={results} padding={2} isToggle={false} />,
     );
 
-    expect(screen.getByText(/30×30 each/i)).toBeInTheDocument();
-    expect(screen.getByText(/45×45 each/i)).toBeInTheDocument();
+    expect(screen.getByText(/30×30px/)).toBeInTheDocument();
+    expect(screen.getByText(/45×45px/)).toBeInTheDocument();
   });
 
 describe('getCornerRadius', () => {

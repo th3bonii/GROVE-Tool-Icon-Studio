@@ -43,6 +43,7 @@ function App() {
   // In batch mode, SourceSection handles the dialog internally and calls this for the first file
   const handleFirstBatchFile = useCallback((file: string, src: string) => {
     setSelectedFile(file);
+    setCrop(null);
     setImageSrc(src);
   }, []);
 
@@ -62,6 +63,7 @@ function App() {
         isToggle={isToggle}
         offAdjustments={offAdjustments}
         onAdjustments={onAdjustments}
+        reaperPath={reaperPath}
         onSelectFile={handleSelectFile}
         onCropChange={setCrop}
         onBatchModeChange={setBatchMode}
@@ -84,17 +86,6 @@ function App() {
           resetAll={resetAll}
         />
       )}
-      <InstallSection
-        reaperPath={reaperPath?.path ?? null}
-        selectedFile={selectedFile}
-        crop={crop}
-        padding={padding}
-        isToggle={isToggle}
-        offAdjustments={offAdjustments}
-        onAdjustments={onAdjustments}
-        installedIcons={installedIcons}
-        setInstalledIcons={setInstalledIcons}
-      />
       <GenerateSection
         selectedFile={selectedFile}
         reaperPath={reaperPath}
@@ -103,6 +94,13 @@ function App() {
         isToggle={isToggle}
         offAdjustments={offAdjustments}
         onAdjustments={onAdjustments}
+        installedIcons={installedIcons}
+        setInstalledIcons={setInstalledIcons}
+      />
+      <InstallSection
+        reaperPath={reaperPath?.path ?? null}
+        installedIcons={installedIcons}
+        setInstalledIcons={setInstalledIcons}
       />
     </div>
   );

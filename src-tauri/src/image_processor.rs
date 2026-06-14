@@ -363,7 +363,7 @@ pub fn apply_hsb(img: &RgbaImage, adj: &HsbAdjustment) -> RgbaImage {
         // Apply deltas
         let new_hue = (hue + adj.hue_shift) % 360.0;
         let new_hue = if new_hue < 0.0 { new_hue + 360.0 } else { new_hue };
-        let new_sat = (sat + adj.sat_delta).clamp(0.0, 1.0);
+        let new_sat = (sat + adj.sat_delta / 100.0).clamp(0.0, 1.0);
         let new_bri = (bri + adj.bri_delta / 100.0).clamp(0.0, 1.0);
 
         let (nr, ng, nb) = hsb_to_rgb(new_hue, new_sat, new_bri);
@@ -1112,8 +1112,8 @@ mod tests {
         let mut img = RgbaImage::new(1, 1);
         img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
 
-        // Decrease saturation: sat_delta=-100 → S=0 → grayscale at brightness level
-        let desat = HsbAdjustment { hue_shift: 0.0, sat_delta: -1.0, bri_delta: 0.0 };
+        // Decrease saturation: sat_delta=-100 → after ÷100 gives S=-1.0 → clamped to 0
+        let desat = HsbAdjustment { hue_shift: 0.0, sat_delta: -100.0, bri_delta: 0.0 };
         let result = apply_hsb(&img, &desat);
         let p = result.get_pixel(0, 0).0;
         // S=0 means all channels equal (grayscale at B=1.0)
@@ -1420,6 +1420,101 @@ mod tests {
         let p = result.get_pixel(0, 0).0;
         assert_eq!(p[0], 0, "Hue shift 240° on red: R should be 0, got {}", p[0]);
         assert_eq!(p[2], 255, "Hue shift 240° on red: B should be 255, got {}", p[2]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 1.1: sat_delta linearity (RED — sat_delta isn't ÷100 yet)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_hsb_sat_delta_intermediate_values() {
+        // Pure red: HSB(0, 1, 1). sat_delta values of -50, -25, 25, 50 should
+        // produce linear saturation shifts once sat_delta is ÷100.
+        // After fix: sat = 1.0 + delta/100, clamped to [0, 1].
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+
+        let cases = [
+            (-50.0, 0.5),  // 1.0 + (-0.5) = 0.5
+            (-25.0, 0.75), // 1.0 + (-0.25) = 0.75
+            (25.0, 1.0),   // 1.0 + 0.25 = 1.25 → clamped to 1.0
+            (50.0, 1.0),   // 1.0 + 0.50 = 1.50 → clamped to 1.0
+        ];
+
+        for &(sat_delta, expected_sat) in &cases {
+            let adj = HsbAdjustment { hue_shift: 0.0, sat_delta, bri_delta: 0.0 };
+            let result = apply_hsb(&img, &adj);
+            let p = result.get_pixel(0, 0).0;
+            let (_h, s, _b) = rgb_to_hsb(p[0], p[1], p[2]);
+            assert!(
+                approx_eq(s, expected_sat, 0.02),
+                "sat_delta={} gives sat={:.3}, expected ~{:.3}", sat_delta, s, expected_sat
+            );
+        }
+    }
+
+    #[test]
+    fn apply_hsb_sat_delta_50_is_double_25() {
+        // sat_delta=50 should produce double the saturation shift of sat_delta=25
+        // For a pixel with S < 1.0, the shift from 50 should be 2× the shift from 25.
+        let mut img = RgbaImage::new(1, 1);
+        // Use a non-fully-saturated pixel so both shifts are within [0,1]
+        // RGB(128, 64, 64) → compute HSB to find saturation
+        img.put_pixel(0, 0, Rgba([128, 64, 64, 255]));
+
+        let adj25 = HsbAdjustment { hue_shift: 0.0, sat_delta: 25.0, bri_delta: 0.0 };
+        let adj50 = HsbAdjustment { hue_shift: 0.0, sat_delta: 50.0, bri_delta: 0.0 };
+
+        let r25 = apply_hsb(&img, &adj25);
+        let r50 = apply_hsb(&img, &adj50);
+
+        let (_h, s25, _b) = rgb_to_hsb(r25.get_pixel(0, 0).0[0], r25.get_pixel(0, 0).0[1], r25.get_pixel(0, 0).0[2]);
+        let (_h, s50, _b) = rgb_to_hsb(r50.get_pixel(0, 0).0[0], r50.get_pixel(0, 0).0[1], r50.get_pixel(0, 0).0[2]);
+
+        let base_sat = 64.0_f32 / 128.0; // red channel / max channel for this pixel
+        let shift25 = (s25 - base_sat).abs();
+        let shift50 = (s50 - base_sat).abs();
+        assert!(
+            (shift50 - shift25 * 2.0).abs() < 0.05,
+            "sat_delta=50 shift ({:.4}) should be 2× sat_delta=25 shift ({:.4})",
+            shift50, shift25
+        );
+    }
+
+    #[test]
+    fn apply_hsb_sat_delta_zero_keeps_s0_pixel_unchanged() {
+        // A pixel with S=0 (gray) should remain unchanged with sat_delta=0.
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([128, 128, 128, 255]));
+
+        let identity = HsbAdjustment { hue_shift: 0.0, sat_delta: 0.0, bri_delta: 0.0 };
+        let result = apply_hsb(&img, &identity);
+        let p = result.get_pixel(0, 0).0;
+
+        // Gray pixel should stay identical (within rounding)
+        assert!((p[0] as i16 - 128).abs() <= 1, "R should stay ~128, got {}", p[0]);
+        assert!((p[1] as i16 - 128).abs() <= 1, "G should stay ~128, got {}", p[1]);
+        assert!((p[2] as i16 - 128).abs() <= 1, "B should stay ~128, got {}", p[2]);
+        assert_eq!(p[3], 255, "Alpha unchanged");
+    }
+
+    #[test]
+    fn apply_hsb_negative_sat_delta_on_gray_stays_gray() {
+        // Gray pixels (S=0) with negative sat_delta should stay gray (S clamped to 0).
+        let mut img = RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, Rgba([128, 128, 128, 255]));
+
+        let adj = HsbAdjustment { hue_shift: 0.0, sat_delta: -50.0, bri_delta: 0.0 };
+        let result = apply_hsb(&img, &adj);
+        let p = result.get_pixel(0, 0).0;
+
+        // Gray pixel with sat_delta negative should stay gray — all channels equal
+        assert!(
+            (p[0] as i16 - p[1] as i16).abs() <= 2 &&
+            (p[1] as i16 - p[2] as i16).abs() <= 2,
+            "Gray pixel should stay gray with negative sat_delta, got RGB({},{},{})",
+            p[0], p[1], p[2]
+        );
     }
 
     // -----------------------------------------------------------------------

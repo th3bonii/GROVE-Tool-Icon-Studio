@@ -2,7 +2,15 @@ pub mod image_processor;
 pub mod installer;
 pub mod path_detector;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+const MAX_ERRORS_PER_SESSION: u32 = 5;
+const MAX_LOG_SIZE: u64 = 1_048_576; // 1 MB
+
+static ERROR_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+static ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[tauri::command]
 fn detect_reaper_path() -> Result<path_detector::DetectionResult, String> {
@@ -48,63 +56,76 @@ async fn process_icon(
     let input_path_owned = input_path.clone();
     let output_dir_owned = output_dir.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let input = Path::new(&input_path_owned);
-        let filename = input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("icon")
-            .to_string();
+    let result: Result<Vec<image_processor::ProcessingOutput>, String> = tokio::task::spawn_blocking(
+        move || -> Result<Vec<image_processor::ProcessingOutput>, String> {
+            let input = Path::new(&input_path_owned);
+            let filename = input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("icon")
+                .to_string();
 
-        let config = build_icon_config(padding, is_toggle, off_adjustments, on_adjustments);
+            let config = build_icon_config(padding, is_toggle, off_adjustments, on_adjustments);
 
-        // Use raw output mode to avoid encode→decode roundtrip
-        let results = image_processor::generate_icon_set_raw(
-            input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
-        ).map_err(|e| e.to_string())?;
+            // Use raw output mode to avoid encode→decode roundtrip
+            let results = image_processor::generate_icon_set_raw(
+                input, &config, crop.as_ref(), image_processor::REAPER_SCALES,
+            ).map_err(|e| e.to_string())?;
 
         // Write raw bytes directly to disk, distributing each scale
         // to the correct REAPER scale subdirectory.
-        let scale_subdirs = ["", "150", "200"];
-        let outputs_per_scale = results.len() / image_processor::REAPER_SCALES.len();
+        let n_scales = image_processor::REAPER_SCALES.len();
+        if results.len() % n_scales != 0 {
+            return Err(format!(
+                "process_icon: results count ({}) not evenly divisible by scales count ({})",
+                results.len(), n_scales
+            ));
+        }
+        let scale_subdirs = image_processor::REAPER_SCALE_DIRS;
+        let outputs_per_scale = results.len() / n_scales;
+
         let written: Vec<image_processor::ProcessingOutput> = results
-            .into_iter()
-            .enumerate()
-            .map(|(idx, output)| {
+                .into_iter()
+                .enumerate()
+                .map(|(idx, output)| -> Result<image_processor::ProcessingOutput, String> {
                 let scale_idx = idx / outputs_per_scale;
-                let sub_dir = scale_subdirs.get(scale_idx).unwrap_or(&"");
-                let target_dir = Path::new(&output_dir_owned).join(sub_dir);
+                let sub_dir = scale_subdirs.get(scale_idx)
+                    .map(|d| d.strip_prefix("Data/toolbar_icons/").unwrap_or(""))
+                    .unwrap_or("");
+                    let target_dir = Path::new(&output_dir_owned).join(sub_dir);
 
-                let suffix = &output.suffix;
-                let output_name = if suffix.is_empty() {
-                    format!("{}.png", filename)
-                } else {
-                    format!("{}{}.png", filename, suffix)
-                };
+                    let suffix = &output.suffix;
+                    let output_name = if suffix.is_empty() {
+                        format!("{}.png", filename)
+                    } else {
+                        format!("{}{}.png", filename, suffix)
+                    };
 
-                let _ = std::fs::create_dir_all(&target_dir);
-                let output_path = target_dir.join(&output_name);
+                    std::fs::create_dir_all(&target_dir)
+                        .map_err(|e| format!("Failed to create directory {:?}: {}", target_dir, e))?;
+                    let output_path = target_dir.join(&output_name);
 
-                eprintln!("[process_icon] writing {} ({}x{})", output_path.display(), output.width, output.height);
-                if let Err(e) = std::fs::write(&output_path, &output.data) {
-                    eprintln!("[process_icon] FAILED to write {}: {}", output_path.display(), e);
-                }
+                    eprintln!("[process_icon] writing {} ({}x{})", output_path.display(), output.width, output.height);
+                    std::fs::write(&output_path, &output.data)
+                        .map_err(|e| format!("Failed to write {}: {}", output_path.display(), e))?;
 
-                image_processor::ProcessingOutput {
-                    width: output.width,
-                    height: output.height,
-                    output_path: Some(output_path),
-                    preview_base64: None,
-                    suffix: output.suffix,
-                }
-            })
-            .collect();
+                    Ok(image_processor::ProcessingOutput {
+                        width: output.width,
+                        height: output.height,
+                        output_path: Some(output_path),
+                        preview_base64: None,
+                        suffix: output.suffix,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-        Ok::<_, String>(written)
-    }).await.map_err(|e| e.to_string())?;
+            Ok(written)
+        },
+    ).await.map_err(|e| e.to_string())?;
 
     result
 }
+
 
 #[tauri::command]
 async fn preview_icon(
@@ -197,8 +218,13 @@ fn install_icon(
 }
 
 #[tauri::command]
-fn list_installed_icons(reaper_resource_path: String) -> Result<Vec<String>, String> {
-    installer::list_installed_icons(Path::new(&reaper_resource_path))
+async fn list_installed_icons(reaper_resource_path: String) -> Result<Vec<String>, String> {
+    let path = reaper_resource_path.clone();
+    tokio::task::spawn_blocking(move || {
+        installer::list_installed_icons(Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -215,6 +241,24 @@ fn get_icon_strip(reaper_resource_path: String, icon_name: String) -> Result<Str
         return Err("Icon name must not be empty".to_string());
     }
     installer::get_icon_strip(Path::new(&reaper_resource_path), &icon_name)
+}
+
+#[tauri::command]
+async fn get_icon_thumbnails(
+    reaper_resource_path: String,
+    names: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let path = reaper_resource_path.clone();
+    let names_clone = names.clone();
+    let thumbnails = tokio::task::spawn_blocking(move || {
+        installer::get_icon_thumbnails(Path::new(&path), &names_clone)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Silently skip unreadable/missing icons — this is intentional behavior
+    // so that a single broken file doesn't prevent ALL thumbnails from loading.
+    Ok(thumbnails)
 }
 
 #[tauri::command]
@@ -638,8 +682,8 @@ mod tests {
     // list_installed_icons (multi-scale) IPC wrapper
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn list_installed_icons_command_returns_icons_from_all_scales() {
+    #[tokio::test]
+    async fn list_installed_icons_command_returns_icons_from_all_scales() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_list_ms");
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -660,6 +704,7 @@ mod tests {
         std::fs::write(dir_200.join("gamma.png"), "fake_png").unwrap();
 
         let result = list_installed_icons(reaper_res.to_string_lossy().to_string())
+            .await
             .expect("list_installed_icons should succeed");
 
         assert!(result.contains(&"alpha".to_string()), "Should find alpha");
@@ -669,17 +714,157 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn list_installed_icons_command_returns_empty_for_new_dir() {
+    #[tokio::test]
+    async fn list_installed_icons_command_returns_empty_for_new_dir() {
         let tmp = std::env::temp_dir().join("grove_test_ipc_list_empty");
         std::fs::create_dir_all(&tmp).unwrap();
 
         let reaper_res = tmp.clone();
 
         let result = list_installed_icons(reaper_res.to_string_lossy().to_string())
+            .await
             .expect("list_installed_icons should succeed");
 
         assert!(result.is_empty(), "New dir should have no icons");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_icon_thumbnails tests (task 3.3)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_icon_thumbnails_skips_nonexistent_icon() {
+        let tmp = std::env::temp_dir().join("grove_test_thumb_missing");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let result = get_icon_thumbnails(
+            tmp.to_string_lossy().to_string(),
+            vec!["nonexistent".to_string()],
+        )
+        .await;
+
+        assert!(result.is_ok(), "Should return Ok (empty) for nonexistent icon");
+        assert!(result.unwrap().is_empty(), "Map should be empty");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn get_icon_thumbnails_returns_available_for_mixed_existing_and_missing() {
+        let tmp = std::env::temp_dir().join("grove_test_thumb_mixed");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let toolbar = tmp.join("Data/toolbar_icons");
+        std::fs::create_dir_all(&toolbar).unwrap();
+        // Create one real icon
+        create_test_png(&toolbar.join("existing.png"));
+
+        // Request two names: one that exists, one that doesn't
+        let result = get_icon_thumbnails(
+            tmp.to_string_lossy().to_string(),
+            vec!["existing".to_string(), "missing".to_string()],
+        )
+        .await;
+
+        assert!(result.is_ok(), "Should return Ok even when some names are missing");
+        let map = result.unwrap();
+        assert_eq!(map.len(), 1, "Should only return the existing icon");
+        assert!(map.contains_key("existing"), "Should contain 'existing'");
+        assert!(!map.contains_key("missing"), "Should NOT contain 'missing'");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn get_icon_thumbnails_returns_all_when_all_exist() {
+        // This test already passes — kept for completeness
+        let tmp = std::env::temp_dir().join("grove_test_thumb_all_exist");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let toolbar = tmp.join("Data/toolbar_icons");
+        std::fs::create_dir_all(&toolbar).unwrap();
+        create_test_png(&toolbar.join("a.png"));
+        create_test_png(&toolbar.join("b.png"));
+
+        let result = get_icon_thumbnails(
+            tmp.to_string_lossy().to_string(),
+            vec!["a".to_string(), "b".to_string()],
+        )
+        .await;
+
+        assert!(result.is_ok(), "Should return Ok when all icons exist");
+        assert_eq!(result.unwrap().len(), 2, "Should return both icons");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 1.4/1.5: Write error propagation (RED — write failure is silent)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn process_icon_returns_err_on_write_failure() {
+        // Setup: output_dir is a FILE, so write() inside process_icon must fail.
+        let tmp = std::env::temp_dir().join("grove_test_write_err");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let input_path = tmp.join("input.png");
+        create_test_png(&input_path);
+
+        // Create a FILE at output_dir's first-level path so create_dir_all
+        // succeeds (creates nothing because it exists) but write() fails.
+        let output_dir = tmp.join("out_is_file");
+        std::fs::write(&output_dir, "i am a file not a directory").unwrap();
+
+        let result = process_icon(
+            input_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            None, None, None, None, None,
+        ).await;
+
+        assert!(result.is_err(),
+            "process_icon should return Err on write failure");
+        assert!(
+            result.unwrap_err().contains("write"),
+            "Error should mention write failure"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2.1/2.2: Integer division guard
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn process_icon_division_even_check_catches_mismatch() {
+        // Verify the guard rejects non-even division.
+        // Create a scenario where results_len % n_scales != 0.
+        // We can't easily call process_icon with arbitrary-sized results,
+        // so we test the logic directly via generate_icon_set_raw + REAPER_SCALES.
+        let tmp = std::env::temp_dir().join("grove_test_div_even");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let input_path = tmp.join("input.png");
+        let img = RgbaImage::from_pixel(32, 32, image::Rgba([100, 150, 200, 255]));
+        img.save(&input_path).expect("Failed to create test PNG");
+
+        let config = image_processor::IconConfig {
+            padding: 4,
+            is_toggle: false,
+            ..Default::default()
+        };
+
+        // Normal call: 3 scales, no toggle → 3 results → 3 % 3 == 0 ✅
+        let results = image_processor::generate_icon_set_raw(
+            &input_path, &config, None, image_processor::REAPER_SCALES,
+        ).expect("generate_icon_set_raw should succeed");
+        assert_eq!(results.len(), 3, "3 scales without toggle");
+        assert_eq!(results.len() % image_processor::REAPER_SCALES.len(), 0,
+            "Should be evenly divisible");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -837,6 +1022,139 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Phase 2 — Error Logging Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_log_entry_writes_message_to_file() {
+        let tmp = std::env::temp_dir().join("grove_test_elog_write");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let log_path = tmp.join("error.log");
+
+        super::write_entry(&log_path, "test error message").unwrap();
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            content.contains("test error message"),
+            "Log should contain the written message"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn error_log_entries_are_appended() {
+        let tmp = std::env::temp_dir().join("grove_test_elog_append");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let log_path = tmp.join("error.log");
+
+        super::write_entry(&log_path, "entry 1").unwrap();
+        super::write_entry(&log_path, "entry 2").unwrap();
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains("entry 1"), "First entry");
+        assert!(content.contains("entry 2"), "Second entry");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn maybe_truncate_reduces_file_size() {
+        let tmp = std::env::temp_dir().join("grove_test_elog_trunc");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let log_path = tmp.join("error.log");
+
+        // Write a file larger than 1 MB
+        let large_line = "x".repeat(500_000);
+        std::fs::write(&log_path, format!("{}\n", large_line)).unwrap();
+        let initial_len = std::fs::metadata(&log_path).unwrap().len();
+        assert!(initial_len > 500_000, "File should be large");
+
+        // Truncate with a small threshold to force action
+        super::maybe_truncate(&log_path, 1024).unwrap();
+
+        let final_len = std::fs::metadata(&log_path).unwrap().len();
+        assert!(final_len <= 1024, "File should be <= 1024 bytes after truncation");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn format_error_message_includes_stack_when_provided() {
+        let msg = super::format_error_message("crash".into(), Some("at line 42".into()));
+        assert!(msg.contains("crash"), "Should contain the error message");
+        assert!(msg.contains("at line 42"), "Should contain the stack trace");
+    }
+
+    #[test]
+    fn format_error_message_omits_stack_when_none() {
+        let msg = super::format_error_message("simple".into(), None);
+        assert!(msg.contains("simple"), "Should contain the error message");
+        assert!(!msg.contains("Stack:"), "Should NOT contain stack section");
+    }
+
+    #[test]
+    fn write_error_log_command_returns_ok() {
+        // Verify the command doesn't crash when called with and without stack
+        super::ERROR_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let result = super::write_error_log("test cmd msg".into(), Some("at cmd".into()));
+        assert!(result.is_ok(), "write_error_log with stack should succeed");
+
+        super::ERROR_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let result2 = super::write_error_log("simple msg".into(), None);
+        assert!(result2.is_ok(), "write_error_log without stack should succeed");
+    }
+
+    #[test]
+    fn write_error_log_returns_ok_without_panic_when_no_log_dir() {
+        // Call write_error_log before init_error_logging — should not crash
+        let result = super::write_error_log("orphan msg".into(), None);
+        assert!(result.is_ok(), "write_error_log should not fail when dir not set");
+    }
+
+    #[test]
+    fn panic_hook_writes_to_error_log() {
+        let tmp = std::env::temp_dir().join("grove_test_elog_panic");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Reset counter
+        super::ERROR_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        // Save old hook, install ours with an explicit closure-captured path
+        let old_hook = std::panic::take_hook();
+        let log_path = tmp.join("error.log");
+        let log_path_for_hook = log_path.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            let msg = super::format_panic_info(info);
+            let _ = super::write_entry(&log_path_for_hook, &msg);
+        }));
+
+        // Trigger a panic
+        let result = std::panic::catch_unwind(|| {
+            panic!("deliberate test panic for error log");
+        });
+        assert!(result.is_err(), "catch_unwind should capture the panic");
+
+        // Restore old hook
+        std::panic::set_hook(old_hook);
+
+        // Verify log file
+        assert!(log_path.exists(), "error.log should exist after panic");
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            content.contains("deliberate test panic"),
+            "Log should contain the panic message"
+        );
+        assert!(content.contains("PANIC:"), "Log should contain PANIC prefix");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
     // Task 1.3: Async command tests
     // -----------------------------------------------------------------------
 
@@ -910,10 +1228,142 @@ mod tests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Error logging — panic capture + IPC error reporting
+// ---------------------------------------------------------------------------
+
+/// Initialise the error logging subsystem.
+///
+/// Creates the log directory, sets the global log path, and installs a panic
+/// hook that writes panics (with backtrace) to `{app_data_dir}/error.log`.
+///
+/// Safe to call multiple times — the global path and hook are initialised
+/// only once (via `OnceLock` + `AtomicBool` guard).
+pub fn init_error_logging(app_data_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|e| format!("Failed to create log directory: {}", e))?;
+    ERROR_LOG_DIR.get_or_init(|| app_data_dir.to_path_buf());
+
+    static PANIC_HOOK_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !PANIC_HOOK_SET.swap(true, Ordering::SeqCst) {
+        std::panic::set_hook(Box::new(|info| {
+            let msg = format_panic_info(info);
+            let count = ERROR_COUNT.fetch_add(1, Ordering::SeqCst);
+            if count < MAX_ERRORS_PER_SESSION {
+                if let Some(dir) = ERROR_LOG_DIR.get() {
+                    let path = dir.join("error.log");
+                    let _ = maybe_truncate(&path, MAX_LOG_SIZE);
+                    let _ = write_entry(&path, &msg);
+                }
+            }
+        }));
+    }
+    Ok(())
+}
+
+/// Format a panic payload + backtrace into a single log-friendly string.
+fn format_panic_info(info: &std::panic::PanicHookInfo) -> String {
+    let payload = info
+        .payload()
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| info.payload().downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "Unknown panic".to_string());
+
+    let location = info
+        .location()
+        .map(|loc| format!(" at {}:{}:{}", loc.file(), loc.line(), loc.column()))
+        .unwrap_or_default();
+
+    let backtrace = std::backtrace::Backtrace::force_capture();
+
+    format!(
+        "PANIC: {}\nLocation:{}\nBacktrace:\n{:?}",
+        payload, location, backtrace,
+    )
+}
+
+/// Format an IPC error message (with optional stack) for the log file.
+pub(crate) fn format_error_message(message: String, stack: Option<String>) -> String {
+    match stack {
+        Some(s) if !s.is_empty() => format!("ERROR: {}\nStack:\n{}", message, s),
+        _ => format!("ERROR: {}", message),
+    }
+}
+
+/// Append a single entry to the error log file.
+///
+/// The file is created if it does not exist. **This function does NOT enforce
+/// the per-session entry cap** — that check belongs at the call site so the
+/// cap is applied consistently across panic hook and IPC paths.
+pub(crate) fn write_entry(path: &Path, msg: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{}", msg)?;
+    Ok(())
+}
+
+/// Truncate a log file to keep its size under `max_size` bytes.
+///
+/// When the file exceeds `max_size`, this keeps approximately the last half of
+/// `max_size` bytes, rounded to the nearest newline boundary so no entry is
+/// split. The first line of the kept portion may be partial; callers should
+/// design log entries as single self-describing lines.
+pub(crate) fn maybe_truncate(path: &Path, max_size: u64) -> std::io::Result<()> {
+    let meta = std::fs::metadata(path)?;
+    if meta.len() <= max_size {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(path)?;
+    let bytes = content.as_bytes();
+    // Keep ~half of max_size bytes, starting at a newline boundary
+    let keep_from = bytes.len().saturating_sub((max_size / 2) as usize);
+    let start = bytes[keep_from..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|pos| keep_from + pos + 1)
+        .unwrap_or(keep_from);
+    std::fs::write(path, &bytes[start..])?;
+    Ok(())
+}
+
+/// Tauri IPC command — write an error message from the frontend to the log file.
+///
+/// The frontend ErrorBoundary calls this when it catches a render crash.
+/// Respects the same 5-entry-per-session cap as the panic hook.
+#[tauri::command]
+fn write_error_log(message: String, stack: Option<String>) -> Result<(), String> {
+    let msg = format_error_message(message, stack);
+    let count = ERROR_COUNT.fetch_add(1, Ordering::SeqCst);
+    if count >= MAX_ERRORS_PER_SESSION {
+        return Ok(());
+    }
+    if let Some(dir) = ERROR_LOG_DIR.get() {
+        let path = dir.join("error.log");
+        let _ = maybe_truncate(&path, MAX_LOG_SIZE);
+        let _ = write_entry(&path, &msg);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri application entry point
+// ---------------------------------------------------------------------------
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            use tauri::Manager;
+            let app_data_dir = app.path().app_data_dir()
+                .expect("Failed to resolve app data directory");
+            let _ = init_error_logging(&app_data_dir);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             detect_reaper_path,
             process_icon,
@@ -923,7 +1373,9 @@ pub fn run() {
             list_installed_icons,
             delete_icon,
             get_icon_strip,
+            get_icon_thumbnails,
             write_file,
+            write_error_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

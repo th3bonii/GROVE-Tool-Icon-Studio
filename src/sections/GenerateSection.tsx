@@ -1,6 +1,7 @@
-import { useCallback, useEffect } from 'react';
-import { useIconProcessing } from '../hooks/useIconProcessing';
+import { useState, useCallback, useEffect } from 'react';
+import { installIconSet, listInstalledIcons } from '../api';
 import type { CropArea, HsbAdjustment, DetectionResult } from '../api';
+import { useLocalStorage } from '../hooks/useLocalStorage';
 
 interface Props {
   selectedFile: string | null;
@@ -10,6 +11,8 @@ interface Props {
   isToggle: boolean;
   offAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
   onAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
+  installedIcons: string[];
+  setInstalledIcons: (icons: string[]) => void;
 }
 
 export default function GenerateSection({
@@ -20,64 +23,89 @@ export default function GenerateSection({
   isToggle,
   offAdjustments,
   onAdjustments,
+  setInstalledIcons,
 }: Props) {
-  const {
-    processing,
-    processResults,
-    error,
-    setProcessResults,
-    setError,
-    handleGenerate,
-  } = useIconProcessing();
+  const [iconName, setIconName] = useLocalStorage('grove-iconName', '');
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string[] | null>(null);
 
-  // Reset results when selectedFile changes (mirrors original handleSelectFile behavior)
+  // Reset results when selectedFile changes
   useEffect(() => {
-    setProcessResults(null);
+    setResult(null);
     setError(null);
   }, [selectedFile]);
 
-  const handleGenerateClick = useCallback(async () => {
+  const handleGenerate = useCallback(async () => {
     if (!selectedFile || !reaperPath?.path || !crop) return;
-    const installDir = `${reaperPath.path}/Data/toolbar_icons`;
-    await handleGenerate(
-      selectedFile,
-      installDir,
-      crop,
-      padding,
-      isToggle,
-      offAdjustments,
-      onAdjustments,
-    );
+    setProcessing(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const targetName = iconName.trim() || '';
+      const res = await installIconSet(
+        selectedFile,
+        reaperPath.path,
+        targetName,
+        crop,
+        padding,
+        isToggle,
+        offAdjustments,
+        onAdjustments,
+      );
+      setResult(res);
+
+      // Refresh installed icons list
+      const icons = await listInstalledIcons(reaperPath.path);
+      setInstalledIcons(icons);
+    } catch (err) {
+      setError(`Generation failed: ${err}`);
+    } finally {
+      setProcessing(false);
+    }
   }, [
-    selectedFile,
-    reaperPath,
-    crop,
-    padding,
-    isToggle,
-    offAdjustments,
-    onAdjustments,
-    handleGenerate,
+    selectedFile, reaperPath, crop, padding, isToggle,
+    iconName, offAdjustments, onAdjustments, setInstalledIcons,
   ]);
 
   const canGenerate = !!selectedFile && !!reaperPath?.path && !!crop && !processing;
-  const totalFiles = processResults ? processResults.length : 0;
+  const totalFiles = result ? result.length : 0;
+  const variants = isToggle ? 2 : 1;
 
   return (
     <section className="section" id="process-section">
+      {/* Icon name input */}
+      <div className="install-field">
+        <label htmlFor="gen-icon-name" className="install-field-label">
+          Icon name <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>(optional)</span>
+        </label>
+        <input
+          id="gen-icon-name"
+          type="text"
+          className="install-filename-input"
+          placeholder="icon-name (defaults to source filename)"
+          value={iconName}
+          onChange={(e) => setIconName(e.target.value)}
+          disabled={processing}
+        />
+      </div>
+
+      {/* Generate button */}
       <button
         id="btn-process"
         className="btn--primary"
         disabled={!canGenerate}
-        onClick={handleGenerateClick}
+        onClick={handleGenerate}
       >
-        {processing ? 'Processing…' : 'Generate 3-State Icon'}
+        {processing ? 'Generating…' : 'Generate & Install'}
       </button>
 
       {error && <p className="error">{error}</p>}
 
-      {processResults && processResults.length > 0 && (
+      {result && result.length > 0 && (
         <div className="result">
-          <p className="success">Icon generated successfully!</p>
+          <p className="success">Icon installed successfully!</p>
           <p
             style={{
               fontSize: '0.8rem',
@@ -85,30 +113,8 @@ export default function GenerateSection({
               marginBottom: '0.5rem',
             }}
           >
-            {totalFiles} file{totalFiles > 1 ? 's' : ''} generated across 3 scales
+            {totalFiles} file{totalFiles > 1 ? 's' : ''} generated across 3 scale{variants > 1 ? ` × ${variants} variants` : ''}
           </p>
-          <div className="scale-summary">
-            {[30, 45, 60].map((scale) => {
-              const scaleResults = processResults.filter((r) => r.height === scale);
-              const dirLabel =
-                scale === 30
-                  ? 'Data/toolbar_icons/'
-                  : scale === 45
-                    ? 'Data/toolbar_icons/150/'
-                    : 'Data/toolbar_icons/200/';
-              return (
-                <div key={scale} className="scale-entry">
-                  <span className="scale-size">
-                    {scale}×{scale}px
-                  </span>
-                  <span className="scale-count">
-                    {scaleResults.length} file(s)
-                  </span>
-                  <code className="scale-dir">{dirLabel}</code>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
     </section>

@@ -49,7 +49,7 @@ describe('App', () => {
 
   it('renders the Generate button (disabled initially)', () => {
     render(<App />);
-    const btn = screen.getByText('Generate 3-State Icon');
+    const btn = screen.getByText('Generate & Install');
     expect(btn).toBeInTheDocument();
     expect(btn).toBeDisabled();
   });
@@ -80,9 +80,7 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => {
-      // "Install to REAPER" appears both as <h2> heading and checkbox label
-      const headings = screen.getAllByText('Install to REAPER');
-      expect(headings.length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Install Targets')).toBeInTheDocument();
     });
   });
 

@@ -14,7 +14,19 @@ export function useIconPreview(
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedFile || !debouncedCrop) return;
+    // Clear results when there's no file selected
+    if (!selectedFile) {
+      setPreviewResults([]);
+      setPreviewError(null);
+      return;
+    }
+
+    // Clear results when crop is reset (e.g. new file selected)
+    if (!debouncedCrop) {
+      setPreviewResults([]);
+      setPreviewError(null);
+      return;
+    }
 
     let cancelled = false;
     setPreviewError(null);

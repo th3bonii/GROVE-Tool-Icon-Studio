@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::image_processor;
@@ -132,6 +132,12 @@ pub fn install_icon_set(
     }
 
     let scale_dirs = image_processor::REAPER_SCALE_DIRS;
+    if outputs.len() % scales.len() != 0 {
+        return Err(format!(
+            "install_icon_set: outputs count ({}) not evenly divisible by scales count ({})",
+            outputs.len(), scales.len()
+        ));
+    }
     let outputs_per_scale = outputs.len() / scales.len();
     let pid = std::process::id();
 
@@ -210,10 +216,22 @@ pub fn install_icon_set_raw(
     }
 
     let scale_dirs = image_processor::REAPER_SCALE_DIRS;
+    if outputs.len() % scales.len() != 0 {
+        return Err(format!(
+            "install_icon_set_raw: outputs count ({}) not evenly divisible by scales count ({})",
+            outputs.len(), scales.len()
+        ));
+    }
     let outputs_per_scale = outputs.len() / scales.len();
     let pid = std::process::id();
 
     // Phase 1: Write all files to temp locations
+    // NOTE: If a write fails partway through the batch, cleanup_temp_files
+    // removes all temp files. However, if a **rename** fails in Phase 2
+    // (the temp→final rename step), already-renamed files are left in place
+    // and cannot be rolled back — only the remaining temp files are cleaned.
+    // This is an acceptable gap since rename on the same filesystem is
+    // near-atomic and failure is OS-level (unlikely after successful write).
     let mut pending: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for (scale_idx, &_scale) in scales.iter().enumerate() {
@@ -356,6 +374,31 @@ pub fn get_icon_strip(reaper_resource_path: &Path, icon_name: &str) -> Result<St
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
+/// Read multiple icon files (100% scale from Data/toolbar_icons)
+/// and return a map of icon name → base64-encoded PNG data.
+///
+/// Skips icons whose files cannot be read (missing, permissions, etc.)
+/// instead of failing the entire batch.
+pub fn get_icon_thumbnails(
+    reaper_resource_path: &Path,
+    names: &[String],
+) -> HashMap<String, String> {
+    let mut results = HashMap::new();
+    for name in names {
+        let candidates = [
+            reaper_resource_path.join("Data/toolbar_icons").join(format!("{}.png", name)),
+            reaper_resource_path.join("toolbar_icons").join(format!("{}.png", name)),
+        ];
+        if let Some(path) = candidates.iter().find(|p| p.exists()) {
+            if let Ok(bytes) = std::fs::read(path) {
+                use base64::Engine;
+                results.insert(name.clone(), base64::engine::general_purpose::STANDARD.encode(&bytes));
+            }
+        }
+    }
+    results
+}
+
 // ---------------------------------------------------------------------------
 // Log helpers
 // ---------------------------------------------------------------------------
@@ -467,6 +510,63 @@ mod tests {
             preview_base64: Some(encoded),
             suffix: suffix.to_string(),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2.3: Integer division guard tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn install_icon_set_rejects_non_even_division() {
+        let tmp = std::env::temp_dir().join("test_install_div_raw");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let reaper_res = tmp.clone();
+
+        use crate::image_processor::ProcessingOutputRaw;
+        // 5 outputs with 3 scales → 5 % 3 = 2 ≠ 0
+        let outputs = vec![
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89], suffix: "".to_string() },
+        ];
+
+        let result = install_icon_set_raw(
+            &outputs, &reaper_res, "testicon", &[30u32, 45, 60],
+        );
+        assert!(result.is_err(), "Should reject non-even division");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("evenly divisible"),
+            "Error should mention divisible: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_icon_set_accepts_even_division() {
+        let tmp = std::env::temp_dir().join("test_install_div_even");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let reaper_res = tmp.clone();
+
+        use crate::image_processor::ProcessingOutputRaw;
+        // 3 outputs with 3 scales → 3 % 3 = 0
+        let outputs = vec![
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00], suffix: "".to_string() },
+            ProcessingOutputRaw { width: 6, height: 1, data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00], suffix: "".to_string() },
+        ];
+
+        let result = install_icon_set_raw(
+            &outputs, &reaper_res, "testicon", &[30u32, 45, 60],
+        );
+        assert!(result.is_ok(), "Should accept even division");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // -----------------------------------------------------------------------

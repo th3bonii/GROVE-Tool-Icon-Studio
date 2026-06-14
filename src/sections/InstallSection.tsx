@@ -1,69 +1,28 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useIconInstall } from '../hooks/useIconInstall';
 import InstallPanel from '../InstallPanel';
-import type { CropArea, HsbAdjustment } from '../api';
+import { getIconThumbnails } from '../api';
 
 interface Props {
   reaperPath: string | null;
-  selectedFile: string | null;
-  crop: CropArea | null;
-  padding: number;
-  isToggle: boolean;
-  offAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
-  onAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
   installedIcons: string[];
   setInstalledIcons: (icons: string[]) => void;
 }
 
 export default function InstallSection({
   reaperPath,
-  selectedFile,
-  crop,
-  padding,
-  isToggle,
-  offAdjustments,
-  onAdjustments,
   installedIcons,
   setInstalledIcons,
 }: Props) {
   const [previewStrip, setPreviewStrip] = useState<string | null>(null);
   const [previewIconName, setPreviewIconName] = useState<string | null>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
 
   const {
-    installEnabled,
-    setInstallEnabled,
-    iconName,
-    setIconName,
-    handleInstallAction,
     handleDeleteIcon,
     handleExportIcon,
     handleGetStrip,
   } = useIconInstall(reaperPath, setInstalledIcons);
-
-  const handleInstall = useCallback(
-    async (fileName: string) => {
-      if (!selectedFile || !reaperPath || !crop) return;
-      await handleInstallAction(
-        selectedFile,
-        crop,
-        padding,
-        isToggle,
-        fileName,
-        offAdjustments,
-        onAdjustments,
-      );
-    },
-    [
-      selectedFile,
-      reaperPath,
-      crop,
-      padding,
-      isToggle,
-      offAdjustments,
-      onAdjustments,
-      handleInstallAction,
-    ],
-  );
 
   const handlePreview = useCallback(
     async (name: string): Promise<string | null> => {
@@ -77,25 +36,50 @@ export default function InstallSection({
     [handleGetStrip],
   );
 
+  // ── Batch actions for selection-based UI ────────────────────────────────
+  const handleDeleteSelected = useCallback(async (names: string[]) => {
+    for (const name of names) {
+      await handleDeleteIcon(name);
+    }
+  }, [handleDeleteIcon]);
+
+  const handleExportSelected = useCallback(async (names: string[]) => {
+    for (const name of names) {
+      await handleExportIcon(name);
+    }
+  }, [handleExportIcon]);
+
+  // ── Thumbnails ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!reaperPath || installedIcons.length === 0) {
+      setThumbnails({});
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      const map = await getIconThumbnails(reaperPath, installedIcons);
+      if (!cancelled) setThumbnails(map);
+    };
+    load().catch((err) => {
+      console.error('Failed to load thumbnails:', err);
+      if (!cancelled) setThumbnails({});
+    });
+    return () => { cancelled = true; };
+  }, [installedIcons, reaperPath]);
+
   if (!reaperPath) return null;
 
   return (
     <section className="section" id="install-section">
       <InstallPanel
         reaperPath={reaperPath}
-        onInstall={handleInstall}
         installedIcons={installedIcons}
-        disabled={!selectedFile || !crop}
-        iconName={iconName}
-        installEnabled={installEnabled}
-        onIconNameChange={setIconName}
-        onInstallEnabledChange={setInstallEnabled}
-        isToggle={isToggle}
-        onDelete={handleDeleteIcon}
-        onExport={handleExportIcon}
+        onDeleteSelected={handleDeleteSelected}
+        onExportSelected={handleExportSelected}
         onPreview={handlePreview}
         previewStrip={previewStrip}
         previewIconName={previewIconName}
+        thumbnails={thumbnails}
       />
     </section>
   );

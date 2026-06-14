@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import type { CropArea, HsbAdjustment } from '../api';
+import type { CropArea, HsbAdjustment, DetectionResult } from '../api';
 import { useBatchProcessing } from '../hooks/useBatchProcessing';
 import ImageCropper from '../ImageCropper';
 import BatchPanel from '../BatchPanel';
@@ -15,6 +15,7 @@ interface Props {
   isToggle: boolean;
   offAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
   onAdjustments: [HsbAdjustment, HsbAdjustment, HsbAdjustment];
+  reaperPath: DetectionResult | null;
   onSelectFile: () => void;
   onCropChange: (crop: CropArea | null) => void;
   onBatchModeChange: (enabled: boolean) => void;
@@ -30,6 +31,7 @@ export default function SourceSection({
   isToggle,
   offAdjustments,
   onAdjustments,
+  reaperPath,
   onSelectFile,
   onCropChange,
   onBatchModeChange,
@@ -62,8 +64,8 @@ export default function SourceSection({
 
   // Batch process all files with current settings
   const handleBatchProcessAll = useCallback(async () => {
-    await batchProcessAll(crop, padding, isToggle, offAdjustments, onAdjustments);
-  }, [batchProcessAll, crop, padding, isToggle, offAdjustments, onAdjustments]);
+    await batchProcessAll(crop, padding, isToggle, offAdjustments, onAdjustments, reaperPath?.path);
+  }, [batchProcessAll, crop, padding, isToggle, offAdjustments, onAdjustments, reaperPath]);
 
   return (
     <section className="section" id="icon-input-section">
@@ -104,7 +106,7 @@ export default function SourceSection({
 
       {imageSrc && (
         <div className="cropper-section">
-          <ImageCropper imageSrc={imageSrc} onCropChange={onCropChange} />
+          <ImageCropper key={imageSrc} imageSrc={imageSrc} onCropChange={onCropChange} />
         </div>
       )}
     </section>
