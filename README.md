@@ -1,71 +1,71 @@
 # GROVE Tool Icon Studio
 
-A desktop application for generating and managing **3-state toolbar icons** for [REAPER](https://reaper.fm) digital audio workstations. Built with Tauri v2, React, and Rust.
+Aplicación de escritorio para generar y gestionar **íconos de barra de herramientas de 3 estados** para estaciones de audio digital [REAPER](https://reaper.fm). Construida con Tauri v2, React y Rust.
 
-## Features
+## Funcionalidades
 
-- **Icon Processing** — Load PNG images, crop, adjust padding, and generate REAPER-compatible toolbar icons at 3 scales (100%, 150%, 200%)
-- **Toggle Mode** — Generate ON/OFF state variants with independent HSB color adjustments
-- **Batch Processing** — Process multiple icons at once with shared settings
-- **HSB Color Adjustment** — Fine-tune hue, saturation, and brightness for each icon state independently
-- **Live Preview** — See all 3 scales and states before installing, in both states and strips view
-- **REAPER Integration** — Install icons directly into REAPER's toolbar_icons directory structure
-- **Icon Management** — Browse, preview, export, and delete installed icons from the interface
-- **Automatic REAPER Detection** — Detects your REAPER resource directory automatically across platforms
+- **Procesamiento de íconos** — Cargue imágenes PNG, recorte, ajuste el padding y genere íconos compatibles con REAPER en 3 escalas (100 %, 150 %, 200 %)
+- **Modo toggle** — Genere variantes de estado ON/OFF con ajustes de color HSB independientes
+- **Procesamiento por lotes** — Procese múltiples íconos a la vez con configuraciones compartidas
+- **Ajuste de color HSB** — Ajuste fino de tono, saturación y brillo para cada estado del ícono de forma independiente
+- **Vista previa en vivo** — Vea las 3 escalas y estados antes de instalar, tanto en vista de estados como de tiras
+- **Integración con REAPER** — Instale íconos directamente en la estructura de directorios `toolbar_icons` de REAPER
+- **Gestión de íconos** — Explore, previsualice, exporte y elimine íconos instalados desde la interfaz
+- **Detección automática de REAPER** — Detecta el directorio de recursos de REAPER automáticamente en todas las plataformas
 
-## Installation
+## Instalación
 
-### Pre-built binaries
+### Binarios precompilados
 
-Download the latest release for your platform from the [Releases page](https://github.com/th3bonii/GROVE-Tool-Icon-Studio/releases).
+Descargue la última versión para su plataforma desde la [página de lanzamientos](https://github.com/th3bonii/GROVE-Tool-Icon-Studio/releases).
 
-| Platform | Format |
-|----------|--------|
+| Plataforma | Formato |
+|------------|---------|
 | Linux | `.deb` / `.AppImage` |
 | macOS | `.dmg` |
 | Windows | `.msi` / `.exe` |
 
-### Build from source
+### Compilar desde el código fuente
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for build prerequisites and instructions for each platform.
+Consulte [DEPLOYMENT.md](DEPLOYMENT.md) para conocer los requisitos previos y las instrucciones de compilación para cada plataforma.
 
-## Usage
+## Uso
 
-1. **Select your REAPER path** — The app auto-detects your REAPER resource directory, or you can set it manually
-2. **Choose a source image** — Load any PNG image (recommended size: 24–80px for toolbar icons)
-3. **Crop and adjust** — Crop the icon area, set padding, enable toggle mode if needed
-4. **Adjust colors** (optional) — Fine-tune HSB values for OFF and ON states
-5. **Preview** — See how the icon will look across all scales and states
-6. **Install** — Name your icon and install it directly into REAPER's toolbar
-7. **Use in REAPER** — Open REAPER's toolbar editor and your icons are ready to use
+1. **Seleccione la ruta de REAPER** — La aplicación detecta automáticamente el directorio de recursos de REAPER, o puede configurarlo manualmente
+2. **Elija una imagen de origen** — Cargue cualquier imagen PNG (tamaño recomendado: 24–80 píxeles para íconos de barra de herramientas)
+3. **Recorte y ajuste** — Recorte el área del ícono, establezca el padding, active el modo toggle si es necesario
+4. **Ajuste de color** (opcional) — Ajuste fino de valores HSB para los estados OFF y ON
+5. **Vista previa** — Vea cómo se verá el ícono en todas las escalas y estados
+6. **Instale** — Asigne un nombre a su ícono e instálelo directamente en la barra de herramientas de REAPER
+7. **Use en REAPER** — Abra el editor de barras de herramientas de REAPER y sus íconos estarán listos para usar
 
-## Development
+## Desarrollo
 
 ```bash
-# Install dependencies
+# Instalar dependencias
 npm install
 
-# Run in development mode
+# Ejecutar en modo de desarrollo
 npm run tauri dev
 
-# Run tests
-npm run test          # TypeScript tests
-cargo test --lib      # Rust tests (from src-tauri/)
+# Ejecutar pruebas
+npm run test            # Pruebas TypeScript
+cargo test --lib        # Pruebas Rust (desde src-tauri/)
 
-# Build for production
+# Compilar para producción
 npm run tauri build
 ```
 
-## Tech Stack
+## Tecnologías
 
-| Layer | Technology |
-|-------|-----------|
+| Capa | Tecnología |
+|------|------------|
 | Frontend | React 18, TypeScript, Vite 6 |
 | Backend | Rust, Tauri v2 |
-| IPC | `@tauri-apps/api` (invoke-based commands) |
-| Testing | Vitest + @testing-library/react (TS), cargo test (Rust) |
-| Image Processing | `image` crate (PNG, resize, composite) |
+| IPC | `@tauri-apps/api` (comandos invoke) |
+| Pruebas | Vitest + @testing-library/react (TS), cargo test (Rust) |
+| Procesamiento de imágenes | `image` crate (PNG, redimensionar, componer) |
 
-## License
+## Licencia
 
 MIT
