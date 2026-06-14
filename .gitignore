@@ -29,3 +29,29 @@ Thumbs.db
 
 # Cargo registry cache
 .cargo/
+
+# Dev tools & AI tooling
+.atl/
+sdd/
+dev docs/
+
+# Test fixtures & images
+image_test/
+test_ruta_reaper/
+
+# Dev scripts
+run-tauri.sh
+
+# SDD archive (historical changes)
+openspec/changes/archive/
+
+# Build analysis output
+dist/stats.html
+
+# Directory leftovers
+Icon/
+Tool/
+Studio/
+
+# Generated config variants
+vite.config.js
